@@ -1,0 +1,38 @@
+# Waveshare UPS HAT (D) battery monitor.
+#
+# Polls the on-board INA219 and triggers `systemctl poweroff` when the
+# 2× 18650 pack drops below the cutoff voltage, giving systemd time to
+# flush the SQLite WAL and unmount cleanly. Without this, the UPS just
+# runs the Pi until the cells flatline, then drops the rail mid-write —
+# defeating the point of having a UPS.
+#
+# Install:
+#   sudo cp scripts/systemd/ups-monitor.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ups-monitor
+#
+# Tune via env vars (see scripts/ups_monitor.py for the full list):
+#   UPS_LOW_V    — shutdown threshold in volts (default 6.4)
+#   UPS_POLL_S   — poll interval (default 30s)
+#   UPS_I2C_ADDR — INA219 address (default 0x42)
+#   UPS_DRY_RUN  — set to log instead of shutting down (for bench test)
+#
+# Logs:
+#   journalctl -u ups-monitor -f
+
+[Unit]
+Description=Waveshare UPS HAT (D) battery monitor
+Documentation=https://github.com/atrainathought/SailinGrace
+After=network.target
+
+[Service]
+Type=simple
+User=root
+# Needs to be root (or have CAP_SYS_BOOT + i2c group) so it can both
+# read I2C and call `systemctl poweroff` without prompting.
+ExecStart=/home/pi/SailinGrace/.venv/bin/python /home/pi/SailinGrace/scripts/ups_monitor.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,46 @@
+# Pi-side raw SignalK delta logger — daily-rotated capture from the
+# local signalk-server. Runs independently of the SailinGrace backend
+# so the boat keeps logging even when no laptop is connected. This is
+# the relay Pi — it does NOT run the SailinGrace app; this unit only
+# captures raw deltas to disk for the post-trip pipeline-adjustment loop.
+#
+# Installed + enabled automatically by scripts/setup_pi.sh. Manual:
+#   sudo cp scripts/pi/sailingrace-logger.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now sailingrace-logger
+#
+# Logs:
+#   journalctl -u sailingrace-logger -f
+#   /home/pi/sailingrace-logs/signalk_<YYYY-MM-DD>.log  (the raw deltas)
+#
+# SD-card safety lives in log_signalk.sh: capture is bounded by KEEP_DAYS
+# (age), MAX_LOG_MB (total size), and MIN_FREE_MB (a hard filesystem
+# free-space floor below which it stops writing rather than fill the
+# card). Tune the values below to your SD card.
+
+[Unit]
+Description=SailinGrace raw SignalK delta logger
+Documentation=https://github.com/atrainathought/SailinGrace
+After=signalk-server.service
+Wants=signalk-server.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/SailinGrace
+Environment=LOG_DIR=/home/pi/sailingrace-logs
+Environment=SIGNALK_URL=ws://localhost:3000/signalk/v1/stream?subscribe=all
+Environment=KEEP_DAYS=14
+Environment=MAX_LOG_MB=4000
+Environment=MIN_FREE_MB=1000
+Environment=GUARD_INTERVAL_S=900
+Environment=SG_REPO=/home/pi/SailinGrace
+ExecStart=/home/pi/SailinGrace/scripts/pi/log_signalk.sh
+Restart=on-failure
+RestartSec=10
+# capture_signalk.py is graceful on SIGINT — give it 10s to flush.
+KillSignal=SIGINT
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

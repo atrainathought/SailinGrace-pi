@@ -1,0 +1,7 @@
+# Created on the Pi by setup_pi.sh, not source
+.venv/
+__pycache__/
+*.py[cod]
+
+# Pi runtime logs (default LOG_DIR is ~/sailingrace-logs, but ignore here too)
+sailingrace-logs/
