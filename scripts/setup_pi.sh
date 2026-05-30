@@ -108,7 +108,24 @@ fi
 
 if ! command -v signalk-server >/dev/null 2>&1; then
   log "installing signalk-server (npm global; takes 2-3 min on a Pi)"
-  sudo npm install -g signalk-server
+  # npm global installs are network-heavy and the most common point of
+  # failure on a fresh Pi. Retry a few times for a transient blip, and if
+  # it STILL fails do not abort — the venv/logger/config-UI steps below
+  # don't need signalk-server at install time (the logger just retries
+  # connecting at runtime). A hard `set -e` exit here used to silently
+  # skip all of those. Re-run this script to finish once the net is back.
+  for attempt in 1 2 3; do
+    if sudo npm install -g signalk-server; then break; fi
+    if [ "$attempt" -lt 3 ]; then
+      warn "signalk-server install attempt $attempt failed — retrying in 10s"
+      sleep 10
+    else
+      warn "signalk-server did not install after 3 attempts — continuing anyway."
+      warn "→ fix the network, then re-run this script (it resumes the remaining steps)"
+      warn "→ or install it alone later: sudo npm install -g signalk-server"
+      SIGNALK_FAILED=1
+    fi
+  done
 else
   log "signalk-server already installed — skipping"
 fi
@@ -241,6 +258,12 @@ EOF
 fi
 
 # ── done ─────────────────────────────────────────────────────────────
+
+if [ "${SIGNALK_FAILED:-0}" = 1 ]; then
+  warn "signalk-server FAILED to install — the relay broker is NOT present."
+  warn "→ everything else below was still installed. Once the network is up:"
+  warn "    sudo npm install -g signalk-server   # then re-run this script"
+fi
 
 cat <<'EOF'
 
