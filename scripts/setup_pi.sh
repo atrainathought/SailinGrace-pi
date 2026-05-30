@@ -138,9 +138,12 @@ if [ -f "$REPO_ROOT/scripts/capture_signalk.py" ]; then
   else
     log "venv already exists at $REPO_ROOT/.venv — skipping create"
   fi
-  log "installing Pi-side Python deps (websockets for the logger, smbus2 for the UPS)"
+  log "installing Pi-side Python deps (websockets, smbus2, pyserial)"
   "$REPO_ROOT/.venv/bin/pip" install --quiet --upgrade pip
-  "$REPO_ROOT/.venv/bin/pip" install --quiet websockets smbus2
+  # websockets: logger + signalk discovery; smbus2: UPS monitor;
+  # pyserial: serial-channel signal discovery. N2K discovery uses raw
+  # SocketCAN (stdlib), so no python-can needed.
+  "$REPO_ROOT/.venv/bin/pip" install --quiet websockets smbus2 pyserial
 else
   warn "not running from a repo clone — skipping venv + Pi-side services"
   warn "→ clone the repo and re-run to install the UPS monitor + logger"
@@ -241,6 +244,13 @@ Setup complete. Next steps (do these manually once):
   capturing once signalk-server is up (steps 3-7). It is disk-safe — it
   caps its own size and stops before the SD card fills, so it will not
   crash the Pi. Watch it with:  journalctl -u sailingrace-logger -f
+
+  SIGNAL DISCOVERY: instead of wiring the can0/serial/TCP/UDP source by
+  hand in the admin UI (steps 6), you can let the Pi find and configure
+  the live source headlessly:
+       sudo .venv/bin/python scripts/discover_signals.py scan          # see what's live
+       sudo .venv/bin/python scripts/discover_signals.py capture       # record raw for parsing
+       sudo .venv/bin/python scripts/discover_signals.py apply --auto   # wire the relay to the best one
 
 ──────────────────────────────────────────────────────────────────────
 EOF

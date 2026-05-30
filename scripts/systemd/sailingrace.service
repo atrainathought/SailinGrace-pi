@@ -1,0 +1,37 @@
+# SailinGrace backend — runs the FastAPI app under uvicorn, subscribes
+# to the local signalk-server, serves the static frontend.
+#
+# Install on the Pi:
+#   sudo cp scripts/systemd/sailingrace.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now sailingrace
+#
+# Logs:
+#   journalctl -u sailingrace -f
+#
+# Adjust paths if you didn't clone into /home/pi/SailinGrace.
+
+[Unit]
+Description=SailinGrace backend
+Documentation=https://github.com/atrainathought/SailinGrace
+# We need signalk-server up first so the SignalKClient finds something
+# to subscribe to. Wants= keeps SailinGrace running even if SignalK
+# drops — the client will reconnect on its own.
+After=signalk-server.service network-online.target
+Wants=signalk-server.service network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/SailinGrace
+Environment=SIGNALK_URL=ws://localhost:3000/signalk/v1/stream?subscribe=self
+Environment=SAILINGRACE_FRONTEND_DIST=/home/pi/SailinGrace/frontend/dist
+ExecStart=/home/pi/SailinGrace/.venv/bin/python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+# Give the lifespan up to 30s to flush the SQLite WAL on shutdown
+# before systemd escalates to SIGKILL.
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
