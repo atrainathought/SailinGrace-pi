@@ -5,3 +5,6 @@ __pycache__/
 
 # Pi runtime logs (default LOG_DIR is ~/sailingrace-logs, but ignore here too)
 sailingrace-logs/
+
+# build artifact from build_pi_bundle.sh
+dist/

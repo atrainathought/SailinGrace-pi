@@ -319,6 +319,29 @@ is a faithful end-to-end test, not a mock.
 > add it as an "NMEA 0183" connection in signalk-server's admin UI, and
 > leave the backend on `SIGNALK_URL` — same sentences, real relay path.
 
+## Config interface — browser setup over a USB-C cable
+
+For the bring-up phase — figuring out how the boat connects, which password, which channel is live — full-headless is awkward. `scripts/pi/config_server.py` is a small browser UI (installed + enabled by `setup_pi.sh` as `sailingrace-config.service`) that wraps the WiFi-join and discovery tools: scan/join the boat WiFi, run signal discovery, see what's live, and wire the relay — all from a page. Once configured, the Pi runs headless; this is only for setup.
+
+It binds `0.0.0.0:8080`, so it's reachable however you connect:
+
+| Connect via | Reach the UI at |
+|---|---|
+| **USB-C cable from the laptop** (recommended) | `http://10.55.0.1:8080` |
+| Ethernet | `http://<pi-hostname>.local:8080` |
+| The Pi's WiFi AP | `http://10.42.0.1:8080` (or `.local`) |
+
+**The USB-C one-cable trick.** The Pi 4's USB-C port is power-in **and** a USB 2.0 OTG (gadget) port. `setup_pi.sh` enables gadget mode (`dtoverlay=dwc2,dr_mode=peripheral` in `config.txt`, `modules-load=dwc2,g_ether` in `cmdline.txt`, applied on the next reboot) and gives `usb0` a fixed address with DHCP (NetworkManager *shared*, `10.55.0.1/24`). So a single USB-C cable from your laptop to the Pi:
+
+- **powers the Pi** (no separate supply at the bench — the UPS HAT isn't needed for setup), and
+- **appears as a USB-ethernet adapter** on the laptop, which gets a `10.55.0.x` lease automatically.
+
+Plug in → browse to `http://10.55.0.1:8080`. No WiFi, no router, no admin UI.
+
+> **Power note:** use the laptop's **USB-C** port if you can — it supplies enough for a Pi 4 at config-time load. A plain USB-A port (especially with the PiCAN-M HAT attached) is marginal and may trip the undervoltage warning; data still works but stability doesn't.
+>
+> **Bench vs boat:** at the bench the laptop powers the Pi over USB-C; on the boat the UPS HAT powers that same port (power needs no data partner) and the laptop connects over ethernet or WiFi instead.
+
 ## Joining a password-protected boat WiFi
 
 NMEA 2000 (`can0`) and bare 0183 (serial) have **no password** — tapping the wire is the access. But if the instrument data only reaches you over a **WiFi MFD network** or the boat WiFi that **Expedition's NMEA output** rides on, the Pi must *join that network as a client* before the `udp`/`tcp`/`signalk` discovery channels can see anything.

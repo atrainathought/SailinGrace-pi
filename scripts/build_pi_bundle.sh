@@ -56,6 +56,7 @@ FILES=(
   scripts/pi/sailingrace-logger.service
   scripts/pi/join_wifi.sh
   scripts/pi/config_server.py
+  scripts/pi/sailingrace-config.service
   scripts/systemd/ups-monitor.service
 )
 if [ "$INCLUDE_SIM" = 1 ]; then

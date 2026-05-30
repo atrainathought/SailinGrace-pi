@@ -187,6 +187,59 @@ if [ "$HAVE_REPO" = 1 ] \
   log "→ feeds the post-trip pipeline-adjustment loop (PROJECT.md #15-19)"
 fi
 
+# ── 9. Config UI + USB-C gadget link (browser setup over one cable) ──
+# config_server.py is a small browser UI for the bring-up phase: scan +
+# join the boat WiFi, run signal discovery, and wire the relay — for when
+# full-headless is impractical (figuring out how Lynx connects). It binds
+# 0.0.0.0:8080, so it's reachable over WiFi, ethernet, or the USB-C gadget.
+#
+# USB-C gadget: ONE USB-C cable from a laptop both POWERS the Pi 4 and
+# makes it a USB-ethernet device — browse to it, no router. Pi 4 USB-C is
+# power-in + USB2 OTG; dr_mode=peripheral makes it a gadget. On the boat
+# the UPS powers that same port instead (power needs no data partner) and
+# the laptop connects over eth/WiFi.
+if [ "$HAVE_REPO" = 1 ] && [ -f "$SCRIPT_DIR/pi/config_server.py" ]; then
+  log "installing the config UI + USB-C gadget link"
+
+  # mDNS so <hostname>.local resolves over any interface.
+  sudo apt install -y avahi-daemon >/dev/null 2>&1 || warn "avahi-daemon install skipped"
+
+  # Enable the USB-C OTG gadget (USB-ethernet). Takes effect after reboot.
+  append_if_missing /boot/firmware/config.txt "# SailinGrace USB-C gadget" <<'EOF'
+
+# SailinGrace USB-C gadget (laptop one-cable power + network for setup)
+dtoverlay=dwc2,dr_mode=peripheral
+EOF
+  CMDLINE=/boot/firmware/cmdline.txt
+  if [ -f "$CMDLINE" ] && ! grep -q "modules-load=dwc2" "$CMDLINE"; then
+    log "adding dwc2,g_ether to $CMDLINE"
+    if grep -qw rootwait "$CMDLINE"; then
+      sudo sed -i 's/\brootwait\b/rootwait modules-load=dwc2,g_ether/' "$CMDLINE"
+    else  # no rootwait token — append to the single cmdline line
+      sudo sed -i '1 s/$/ modules-load=dwc2,g_ether/' "$CMDLINE"
+    fi
+  fi
+
+  # Give usb0 a fixed address + DHCP via NetworkManager "shared" so the
+  # laptop is leased an address automatically and you browse to a known IP.
+  # usb0 only appears after the gadget reboot; the profile auto-activates then.
+  if ! nmcli -g NAME connection show 2>/dev/null | grep -qx sg-usb; then
+    sudo nmcli connection add type ethernet con-name sg-usb ifname usb0 \
+      ipv4.method shared ipv4.addresses 10.55.0.1/24 ipv6.method ignore \
+      connection.autoconnect yes >/dev/null 2>&1 \
+      || warn "couldn't pre-create the usb0 connection (it'll be created on first plug-in)"
+  fi
+
+  # The config UI service. Runs as root so it can drive nmcli / systemctl /
+  # can0 on your behalf from the browser.
+  install_unit "$SCRIPT_DIR/pi/sailingrace-config.service"
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now sailingrace-config \
+    || warn "config UI didn't start yet — enabled for next boot"
+  log "→ config UI: http://10.55.0.1:8080 (USB-C cable) or http://$(hostname).local:8080"
+  log "→ USB-C gadget activates after the reboot below"
+fi
+
 # ── done ─────────────────────────────────────────────────────────────
 
 cat <<'EOF'
@@ -251,6 +304,12 @@ Setup complete. Next steps (do these manually once):
        sudo .venv/bin/python scripts/discover_signals.py scan          # see what's live
        sudo .venv/bin/python scripts/discover_signals.py capture       # record raw for parsing
        sudo .venv/bin/python scripts/discover_signals.py apply --auto   # wire the relay to the best one
+
+  CONFIG UI (easiest for bring-up): after the reboot, plug a USB-C cable
+  from your laptop to the Pi's USB-C port — it powers the Pi AND appears as
+  a USB-ethernet device. Browse to http://10.55.0.1:8080 to scan/join the
+  boat WiFi, run discovery, and wire the relay from a page. Also reachable
+  over ethernet/WiFi at http://<this-pi>.local:8080.
 
 ──────────────────────────────────────────────────────────────────────
 EOF

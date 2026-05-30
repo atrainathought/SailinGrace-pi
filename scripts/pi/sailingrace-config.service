@@ -1,0 +1,36 @@
+# SailinGrace Pi config UI — browser-based setup for the bring-up phase
+# (scan + join the boat WiFi, run signal discovery, wire the relay). For
+# when full-headless is impractical, e.g. working out how Lynx connects.
+#
+# Serves on 0.0.0.0:8080 so it's reachable over WiFi, ethernet, or the
+# USB-C gadget link (one cable from a laptop powers the Pi 4 AND carries
+# the network). Runs as root so it can drive nmcli / systemctl / can0 on
+# your behalf from the page. Not the SailinGrace app — just a setup tool.
+#
+# Installed + enabled by scripts/setup_pi.sh. Manual:
+#   sudo cp scripts/pi/sailingrace-config.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now sailingrace-config
+#
+#   journalctl -u sailingrace-config -f
+#
+# Optional: uncomment CONFIG_TOKEN to require ?token=… on the API (the
+# boat network is private, so it's off by default).
+
+[Unit]
+Description=SailinGrace Pi config UI (setup / discovery)
+Documentation=https://github.com/atrainathought/SailinGrace-pi
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Environment=CONFIG_PORT=8080
+Environment=SIGNALK_NODE_SETTINGS=/home/pi/.signalk/settings.json
+# Environment=CONFIG_TOKEN=change-me
+ExecStart=/home/pi/SailinGrace/.venv/bin/python /home/pi/SailinGrace/scripts/pi/config_server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
