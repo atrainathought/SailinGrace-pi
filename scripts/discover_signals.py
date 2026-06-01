@@ -77,8 +77,29 @@ NMEA_UDP_PORTS = (2000, 10110, 50000)
 SIGNALK_PORTS = (3000,)
 DEFAULT_BAUDS = (4800, 38400)
 CAN_IFACE = "can0"
+
+
+def _real_home() -> Path:
+    """Home of the *invoking* user, even under sudo.
+
+    `apply` needs sudo for the can0 socket, but signalk-server's
+    settings.json lives in the login user's home (e.g. /home/pi), not
+    root's. Under sudo `Path.home()` is /root, which made `apply` fail
+    with "/root/.signalk/settings.json not found". Honor SUDO_USER so the
+    same command works with or without sudo.
+    """
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user and sudo_user != "root":
+        try:
+            import pwd
+            return Path(pwd.getpwnam(sudo_user).pw_dir)
+        except (KeyError, ImportError):
+            pass
+    return Path.home()
+
+
 SIGNALK_SETTINGS = Path(os.environ.get("SIGNALK_NODE_SETTINGS",
-                        str(Path.home() / ".signalk" / "settings.json")))
+                        str(_real_home() / ".signalk" / "settings.json")))
 
 # Start of an NMEA 0183 line: $TTSSS, or !TTSSS, (talker + sentence id).
 _NMEA_RE = re.compile(rb"^[!$]([A-Z]{2})([A-Z]{3}),")
