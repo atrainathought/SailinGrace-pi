@@ -65,7 +65,8 @@ do_or_say() {
 
 echo
 echo "── systemd units ─────────────────────────────────────────────"
-for unit in sailingrace sailingrace-logger ups-monitor; do
+# sailingrace = the retired all-in-one backend unit, removed if an old install left it.
+for unit in sailingrace sailingrace-logger sailingrace-config ups-monitor; do
   unit_path="/etc/systemd/system/${unit}.service"
   if systemctl list-unit-files 2>/dev/null | grep -q "^${unit}.service"; then
     do_or_say "stop ${unit}.service"     sudo systemctl stop "${unit}.service" 2>/dev/null
@@ -86,6 +87,9 @@ for f in "$REPO_ROOT/data/license.json" "$REPO_ROOT/data/settings.json"; do
     do_or_say "remove $f" rm -f "$f"
   fi
 done
+if [[ -d /etc/sailingrace ]]; then
+  do_or_say "remove /etc/sailingrace (config UI setup token)" sudo rm -rf /etc/sailingrace
+fi
 
 # ── 3. archive logs + db (opt-in) ───────────────────────────────────
 

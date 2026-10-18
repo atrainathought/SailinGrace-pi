@@ -21,12 +21,13 @@
 #   - signalk-server can0 connection (configure once via the admin web UI
 #     at http://<pi>:3000/admin)
 #
-# Usage — from inside a SailinGrace clone on the Pi:
-#   bash scripts/setup_pi.sh
+# Usage — from inside a SailinGrace-pi clone on the Pi:
+#   git clone https://github.com/atrainathought/SailinGrace-pi.git ~/SailinGrace-pi
+#   bash ~/SailinGrace-pi/scripts/setup_pi.sh
 #
 # Usage — one-shot from a fresh Pi without cloning:
-#   curl -fsSL https://raw.githubusercontent.com/atrainathought/SailinGrace/master/scripts/setup_pi.sh | bash
-#   (the UPS monitor pieces will be skipped — clone the repo to get them)
+#   curl -fsSL https://raw.githubusercontent.com/atrainathought/SailinGrace-pi/master/scripts/setup_pi.sh | bash
+#   (the UPS monitor, logger and config UI are skipped — clone to get them)
 
 set -euo pipefail
 
@@ -135,7 +136,7 @@ fi
 # curl one-shot has no clone, so these steps are skipped there — re-run
 # from a clone to get them.
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" && pwd)"  # :-. for curl | bash
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 HAVE_REPO=0
 
@@ -247,6 +248,17 @@ EOF
       || warn "couldn't pre-create the usb0 connection (it'll be created on first plug-in)"
   fi
 
+  # Setup token for the config UI on networks other than the USB-C cable.
+  # Root-only; kept across re-runs so a token you've written down stays valid.
+  CONFIG_TOKEN_FILE=/etc/sailingrace/config-token
+  if ! sudo test -s "$CONFIG_TOKEN_FILE"; then
+    log "generating config UI setup token at $CONFIG_TOKEN_FILE"
+    sudo install -d -m 0700 /etc/sailingrace
+    python3 -c 'import secrets; print(secrets.token_urlsafe(9))' \
+      | sudo tee "$CONFIG_TOKEN_FILE" >/dev/null
+    sudo chmod 0600 "$CONFIG_TOKEN_FILE"
+  fi
+
   # The config UI service. Runs as root so it can drive nmcli / systemctl /
   # can0 on your behalf from the browser.
   install_unit "$SCRIPT_DIR/pi/sailingrace-config.service"
@@ -311,10 +323,11 @@ Setup complete. Next steps (do these manually once):
        curl -s http://localhost:3000/signalk/v1/api/vessels/self | head
        # Should return JSON, not "Unauthorized".
 
-  8. On your laptop (NOT the Pi), launch SailinGrace pointed at the Pi:
-       SIGNALK_URL=ws://<this-pi>.local:3000/signalk/v1/stream?subscribe=self \
-         python -m uvicorn backend.main:app --port 8000
-       Then browse http://localhost:8000
+  8. On your laptop (NOT the Pi), install SailinGrace — in the SailinGrace
+     clone: bash scripts/install_native.sh (or Docker; see install_native.md).
+     Set the admin password from the blue banner, then Settings → Network:
+       ws://<this-pi>.local:3000/signalk/v1/stream?subscribe=self
+     Save — it applies live, no restart.
 
   NOTE: The raw SignalK delta logger is already enabled and will start
   capturing once signalk-server is up (steps 3-7). It is disk-safe — it
@@ -332,7 +345,12 @@ Setup complete. Next steps (do these manually once):
   from your laptop to the Pi's USB-C port — it powers the Pi AND appears as
   a USB-ethernet device. Browse to http://10.55.0.1:8080 to scan/join the
   boat WiFi, run discovery, and wire the relay from a page. Also reachable
-  over ethernet/WiFi at http://<this-pi>.local:8080.
+  over ethernet/WiFi at http://<this-pi>.local:8080 — there the page asks
+  for the setup token below (the USB-C cable needs none).
 
 ──────────────────────────────────────────────────────────────────────
 EOF
+if [ -n "${CONFIG_TOKEN_FILE:-}" ] && sudo test -s "$CONFIG_TOKEN_FILE"; then
+  printf '  Config UI setup token (off-cable): \033[1m%s\033[0m\n' "$(sudo cat "$CONFIG_TOKEN_FILE")"
+  printf '  (show it again: sudo cat %s)\n\n' "$CONFIG_TOKEN_FILE"
+fi

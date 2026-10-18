@@ -7,9 +7,9 @@ Two variants based on where SailinGrace itself runs:
 | Variant | Pi runs | Laptop runs | When to pick |
 |---------|---------|-------------|--------------|
 | **A1 — All-in-one** | signalk-server + SailinGrace backend + frontend | browser only | No laptop available; pure boat-side appliance |
-| **A2 — Pi as relay** (recommended) | signalk-server only | SailinGrace (Docker or venv) | You have a laptop. Better CPU, bigger screen, Pi stays simple |
+| **A2 — Pi as relay** (recommended) | signalk-server only | SailinGrace (native or Docker) | You have a laptop. Better CPU, bigger screen, Pi stays simple |
 
-Hardware bring-up is identical for both; only the SailinGrace-install step differs (A1 installs on the Pi via this doc; A2 installs on the laptop via [install_docker.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_docker.md) or [install_dev.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_dev.md) and points at the Pi's SignalK URL).
+Hardware bring-up is identical for both; only the SailinGrace-install step differs (A1 installs on the Pi via this doc; A2 installs on the laptop via [install_native.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_native.md) (or [install_docker.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_docker.md)) and points at the Pi's SignalK URL).
 
 ## What's in the kit
 
@@ -143,24 +143,22 @@ Alternatives if your signalk-server version doesn't have that toggle:
 
 ### 5. Launch SailinGrace
 
-**Variant A2 (recommended)** — Pi is the SignalK relay, SailinGrace runs on a laptop. Install on the laptop via [install_docker.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_docker.md) or [install_dev.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_dev.md), then in the Settings modal (Network tab) point at `ws://<pi>.local:3000/signalk/v1/stream?subscribe=all`. Pi side: **nothing more to do**.
+**Variant A2 (recommended)** — Pi is the SignalK relay, SailinGrace runs on a laptop. Install on the laptop via [install_native.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_native.md) (`bash scripts/install_native.sh` in the SailinGrace clone — no Docker) or [install_docker.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_docker.md). Sign in as **admin**, then in Settings → Network set `ws://<pi>.local:3000/signalk/v1/stream?subscribe=self` and save — it applies live, no restart. Pi side: **nothing more to do**.
 
-**Variant A1** — Pi runs everything. Install via Docker on the Pi:
+**Variant A1** — Pi runs everything. Use the main repo's native installer on the Pi (it supports Raspberry Pi OS / arm64 and installs an auto-start systemd unit — this repo no longer ships its own `sailingrace.service`):
 
 ```bash
-# In the SailinGrace clone already on the Pi:
+# In a SailinGrace clone on the Pi:
 cd ~/SailinGrace
-# Install Docker if not already present:
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker pi
-# Log out and back in, then:
-docker compose up -d --build
+bash scripts/install_native.sh          # add --system for a system-wide unit
 
-# Configure the local SignalK URL via the Settings modal:
-# http://<pi>.local:8000   →   ⚙ → Network → ws://localhost:3000/signalk/v1/stream?subscribe=all
+# Then, from the navigator's device on the boat network:
+# http://<pi>.local:8000 → set the admin password from the blue banner →
+#   Settings → Network → ws://localhost:3000/signalk/v1/stream?subscribe=self
+#   (applies live, no restart)
 ```
 
-Or, for the venv install (no Docker), follow [install_dev.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_dev.md) on the Pi.
+Set the admin password straight away: until you do, every device on the WiFi is admin. After that, everyone else gets the read-only **viewer** profile; changing settings, boats or routes needs **admin**. Docker ([install_docker.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_docker.md)) also works if you prefer it.
 
 ## Manual command reference (what the script does for you)
 
@@ -252,7 +250,7 @@ The logger is bounded three ways (env vars on the unit; defaults shown) so a ful
 
 These checks run continuously, not just at startup, so a multi-week passage without a reboot stays bounded. Tune the values on the unit (`/etc/systemd/system/sailingrace-logger.service`) to your SD card — e.g. a 32 GB card might want `MAX_LOG_MB=2000`. `journald`'s own logs are separately self-capping (`SystemMaxUse`), so they won't fill the card either.
 
-Independent of `sailingrace.service` — the Pi logs whether the laptop is connected or not. Feeds the post-trip pipeline-adjustment loop (PROJECT.md #15-19).
+Independent of the SailinGrace app — the Pi logs whether the laptop is connected or not. Feeds the post-trip pipeline-adjustment loop (PROJECT.md #15-19).
 
 ## Simulation Pi — fake boat for testing (no instruments)
 
@@ -305,7 +303,7 @@ the fake samples are distinguishable from real instrument data in the DB:
 
 ```bash
 INGEST_SOURCE=synthetic NMEA0183_URL=tcp://simpi.local:10110 \
-  python -m uvicorn backend.main:app --port 8015
+  python -m uvicorn backend.main:app --port 8000
 ```
 
 `INGEST_SOURCE=synthetic` stamps every persisted `InstrumentSample.source`
@@ -337,6 +335,8 @@ It binds `0.0.0.0:8080`, so it's reachable however you connect:
 - **appears as a USB-ethernet adapter** on the laptop, which gets a `10.55.0.x` lease automatically.
 
 Plug in → browse to `http://10.55.0.1:8080`. No WiFi, no router, no admin UI.
+
+**Access.** The cable is the credential: over USB-C (and on the Pi itself) the page needs nothing. From any other network — ethernet, the boat WiFi, the Pi's AP — the page asks once for the **setup token**, which `setup_pi.sh` generates into `/etc/sailingrace/config-token` (root-only) and prints at the end of its run. Show it again with `sudo cat /etc/sailingrace/config-token`; delete the file and re-run `setup_pi.sh` to rotate it. Without a token file, the UI only works over the cable. The token travels in a request header, so another website open in your browser can't drive the Pi's API.
 
 > **Power note:** use the laptop's **USB-C** port if you can — it supplies enough for a Pi 4 at config-time load. A plain USB-A port (especially with the PiCAN-M HAT attached) is marginal and may trip the undervoltage warning; data still works but stability doesn't.
 >
@@ -449,7 +449,7 @@ If the laptop joins the Pi's AP for instruments, that Wi-Fi radio is now busy an
 - **Conformal coating** on both HATs before mounting. Salt + humidity will eat unprotected boards in a season.
 - **Power input** — feed the UPS HAT's USB-C input, not the Pi's. Pi's own power port stays on the *output* side of the UPS.
 - **Pi 3B+ vs Pi 4** — micro-USB on the 3B+ is mechanically weaker. Hot-glue or strain-relief on the micro-USB plug.
-- **Network surface** — when the Pi is the AP, it's exposing FastAPI on 8000 with no auth. Acceptable on a private boat network; do not run it on a public Wi-Fi.
+- **Network surface** — the Pi exposes signalk-server on 3000 (admin protected by its own login; anonymous read-only if you enabled Allow Readonly) and the config UI on 8080 (open over the USB-C cable, setup token elsewhere). In A1 the SailinGrace app on 8000 gives everyone the read-only viewer profile once the admin password is set; changes need that password. Still, prefer a private boat network over public Wi-Fi.
 
 ## Uninstall
 
@@ -462,7 +462,7 @@ sudo bash scripts/uninstall.sh --confirm --archive-logs   # copy logs + DB to /t
 sudo bash scripts/uninstall.sh --confirm --remove-repo    # nuke the clone too
 ```
 
-Removes SailinGrace systemd units (sailingrace, sailingrace-logger, ups-monitor) + runtime config overrides. Leaves signalk-server, can-utils, Node.js, system Python, user venvs untouched — those predate SailinGrace and may be used by other tools.
+Removes SailinGrace systemd units (sailingrace-logger, sailingrace-config, ups-monitor, plus a legacy sailingrace unit if present), the config UI setup token, and runtime config overrides. Leaves signalk-server, can-utils, Node.js, system Python, user venvs untouched — those predate SailinGrace and may be used by other tools.
 
 ## Tested-on / known-working
 
