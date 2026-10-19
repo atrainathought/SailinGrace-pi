@@ -15,8 +15,14 @@ shells out to the tools that already exist:
 
 No routing/weather code, no extra dependencies (Python stdlib only).
 Run by `sailingrace-config.service` as root so it can drive nmcli,
-systemctl, and can0. LAN-only; on a private boat network it is
-unauthenticated unless CONFIG_TOKEN is set (then send ?token=… ).
+systemctl, and can0.
+
+Access: the USB-C cable (10.55.0.0/24) and the Pi itself are trusted — a
+physical cable is the credential. From any other network (boat WiFi, the
+Pi's AP, ethernet) the API needs the setup token, which setup_pi.sh writes
+to /etc/sailingrace/config-token and prints at the end; the page asks for
+it once. CONFIG_TOKEN overrides the file. If neither exists, only the
+cable and localhost can use the API.
 
     sudo python3 scripts/pi/config_server.py            # :8080
     CONFIG_PORT=9000 python3 scripts/pi/config_server.py
@@ -24,8 +30,11 @@ unauthenticated unless CONFIG_TOKEN is set (then send ?token=… ).
 
 from __future__ import annotations
 
+import hmac
+import ipaddress
 import json
 import os
+import socket
 import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -37,7 +46,24 @@ PY = str(VENV_PY) if VENV_PY.exists() else "python3"
 DISCOVER = str(REPO_ROOT / "scripts" / "discover_signals.py")
 JOIN_WIFI = str(REPO_ROOT / "scripts" / "pi" / "join_wifi.sh")
 PORT = int(os.environ.get("CONFIG_PORT", "8080"))
-TOKEN = os.environ.get("CONFIG_TOKEN", "")
+TOKEN_FILE = Path(os.environ.get("CONFIG_TOKEN_FILE", "/etc/sailingrace/config-token"))
+# Networks that need no token: loopback and the USB-C gadget link.
+TRUSTED_NETS = [ipaddress.ip_network(n) for n in
+                os.environ.get("CONFIG_TRUSTED_NETS", "127.0.0.0/8,::1/128,10.55.0.0/24").split(",")
+                if n.strip()]
+
+
+def _load_token() -> str:
+    tok = os.environ.get("CONFIG_TOKEN", "").strip()
+    if tok:
+        return tok
+    try:
+        return TOKEN_FILE.read_text().strip()
+    except OSError:
+        return ""
+
+
+TOKEN = _load_token()
 # Where signalk-server keeps its settings — so `apply` writes the right file
 # even though this server runs as root (whose $HOME is /root).
 SIGNALK_SETTINGS = os.environ.get(
@@ -84,22 +110,36 @@ PAGE = """<!doctype html><html><head><meta charset=utf-8>
 <pre id=log>—</pre>
 
 <script>
-const tok = new URLSearchParams(location.search).get('token');
-const q = p => tok ? p+(p.includes('?')?'&':'?')+'token='+encodeURIComponent(tok) : p;
+const esc = s => String(s??'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let tok=''; try{tok=sessionStorage.getItem('sg-token')||''}catch(e){}
 const log = (t)=>document.getElementById('log').textContent = (typeof t==='string'?t:JSON.stringify(t,null,2));
-async function jget(p){const r=await fetch(q(p));return r.json()}
-async function jpost(p,b){const r=await fetch(q(p),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b||{})});return r.json()}
+async function call(p,opt){
+  for(;;){
+    const r=await fetch(p,{...opt,headers:{...(opt&&opt.headers),'X-Config-Token':tok}});
+    if(r.status!==401) return r.json();
+    const t=prompt('Setup token (printed at the end of setup_pi.sh; sudo cat /etc/sailingrace/config-token). Not needed over the USB-C cable.');
+    if(!t) throw new Error('token required');
+    tok=t.trim(); try{sessionStorage.setItem('sg-token',tok)}catch(e){}
+  }
+}
+const jget = p => call(p,{});
+const jpost = (p,b) => call(p,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b||{})});
 
 async function status(){
   try{const s=await jget('/api/status');
     document.getElementById('status').innerHTML =
-      `<div>WiFi: <b>${s.wifi||'—'}</b> · relay source: <b class="${s.relay?'ok':'bad'}">${s.relay||'none'}</b></div>`+
-      `<div><small>reach this Pi at: ${(s.urls||[]).join(' · ')||'—'}</small></div>`;
+      `<div>WiFi: <b>${esc(s.wifi)||'—'}</b> · relay source: <b class="${s.relay?'ok':'bad'}">${esc(s.relay)||'none'}</b></div>`+
+      `<div><small>reach this Pi at: ${(s.urls||[]).map(esc).join(' · ')||'—'}</small></div>`;
   }catch(e){document.getElementById('status').textContent='status error'}
 }
 async function scanWifi(){log('scanning WiFi…');const r=await jget('/api/wifi/scan');
-  document.getElementById('wifilist').innerHTML =
-    (r.networks||[]).map(n=>`<div class=row><button class=sec onclick="document.getElementById('ssid').value='${n.ssid.replace(/'/g,"")}'">${n.ssid}</button> <small>${n.signal}% ${n.security}</small></div>`).join('');
+  const list=document.getElementById('wifilist');list.innerHTML='';
+  (r.networks||[]).forEach(n=>{
+    const row=document.createElement('div');row.className='row';
+    const b=document.createElement('button');b.className='sec';b.textContent=n.ssid;
+    b.onclick=()=>{document.getElementById('ssid').value=n.ssid};
+    const sm=document.createElement('small');sm.textContent=`${n.signal}% ${n.security}`;
+    row.append(b,' ',sm);list.appendChild(row);});
   log(r);}
 async function joinWifi(){log('joining…');
   const r=await jpost('/api/wifi/join',{ssid:ssid.value,password:pw.value});log(r);status();}
@@ -109,7 +149,7 @@ async function discover(){log('scanning channels (can take ~20s)…');
   (r.results||[]).filter(x=>x.live&&x.transport!=='signalk').forEach(x=>{
     const o=document.createElement('option');o.value=x.channel;o.textContent=`${x.channel} (${x.protocol}, ${x.rate_hz}/s)`;sel.appendChild(o);});
   document.getElementById('sources').innerHTML =
-    (r.results||[]).map(x=>`<div class="${x.live?'ok':''}">${x.live?'●':'○'} ${x.channel} — ${x.protocol||'—'} ${x.rate_hz?x.rate_hz+'/s':''}</div>`).join('');
+    (r.results||[]).map(x=>`<div class="${x.live?'ok':''}">${x.live?'●':'○'} ${esc(x.channel)} — ${esc(x.protocol)||'—'} ${x.rate_hz?esc(x.rate_hz)+'/s':''}</div>`).join('');
   log(r);}
 async function capture(){log('capturing…');const r=await jpost('/api/capture',{});log(r);}
 async function apply_(){const s=document.getElementById('source').value;
@@ -172,10 +212,45 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):  # quiet
         pass
 
-    def _auth_ok(self):
-        if not TOKEN:
+    def _trusted_peer(self) -> bool:
+        try:
+            ip = ipaddress.ip_address(self.client_address[0])
+        except ValueError:
+            return False
+        if getattr(ip, "ipv4_mapped", None):
+            ip = ip.ipv4_mapped
+        return any(ip in n for n in TRUSTED_NETS)
+
+    def _host_ok(self) -> bool:
+        """Refuse DNS-rebinding: only IP literals, localhost, *.local or
+        this Pi's hostname may be in the Host header."""
+        host = (self.headers.get("Host") or "").strip().lower()
+        if host.startswith("["):
+            host = host[1:].split("]")[0]
+        elif host.count(":") == 1:
+            host = host.split(":")[0]
+        try:
+            ipaddress.ip_address(host)
             return True
-        return parse_qs(urlparse(self.path).query).get("token", [""])[0] == TOKEN
+        except ValueError:
+            pass
+        name = socket.gethostname().lower()
+        return host in ("localhost", name, f"{name}.local") or host.endswith(".local")
+
+    def _auth(self) -> int:
+        """0 if allowed, else the HTTP status to refuse with. The token comes
+        in a custom header, so a cross-site page can't forge an API call
+        (custom headers force a CORS preflight, which is never granted)."""
+        if not self._host_ok():
+            return 403
+        sent = self.headers.get("X-Config-Token")
+        if sent is None:
+            return 401
+        if self._trusted_peer():
+            return 0
+        if TOKEN and hmac.compare_digest(sent.encode(), TOKEN.encode()):
+            return 0
+        return 401
 
     def _send(self, code, body, ctype="application/json"):
         data = body if isinstance(body, bytes) else (
@@ -183,6 +258,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Frame-Options", "DENY")
         self.end_headers()
         self.wfile.write(data)
 
@@ -190,9 +267,11 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         qs = parse_qs(urlparse(self.path).query)
         if path == "/":
+            if not self._host_ok():
+                return self._send(403, {"error": "bad host"})
             return self._send(200, PAGE, "text/html")
-        if not self._auth_ok():
-            return self._send(403, {"error": "bad token"})
+        if code := self._auth():
+            return self._send(code, {"error": "setup token required" if code == 401 else "bad host"})
         if path == "/api/status":
             return self._send(200, _status())
         if path == "/api/wifi/scan":
@@ -209,8 +288,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        if not self._auth_ok():
-            return self._send(403, {"error": "bad token"})
+        if code := self._auth():
+            return self._send(code, {"error": "setup token required" if code == 401 else "bad host"})
         length = int(self.headers.get("Content-Length", 0))
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -238,7 +317,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
-    print(f"SailinGrace config UI on http://0.0.0.0:{PORT}  (token {'set' if TOKEN else 'off'})")
+    print(f"SailinGrace config UI on http://0.0.0.0:{PORT}  "
+          f"(USB-C cable: open; other networks: {'setup token' if TOKEN else 'disabled, no token'})")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
