@@ -68,100 +68,30 @@ SignalK wants −π..π).
 
 ## ESP32 generator
 
-The ESP32 repo is a WiFi/TCP 0183 logger today; this is a **separate**
-PlatformIO project so the logger stays untouched (e.g.
-`SailinGrace-esp32/firmware-n2ksim/`). Wiring is in
-[bench_materials.md § ESP32 node](bench_materials.md#3-esp32-node-sensor-generator).
+The firmware lives in **[`SailinGrace-esp32/firmware-n2ksim/`](https://github.com/atrainathought/SailinGrace-esp32/tree/master/firmware-n2ksim)**
+— a separate PlatformIO project, so the WiFi race logger in `firmware/`
+stays untouched. Same Feather HUZZAH32, different firmware. Wiring is in
+[bench_materials.md § ESP32 node](bench_materials.md#3-esp32-node-sensor-generator)
+and the project README.
 
-`platformio.ini`:
-
-```ini
-[env:featheresp32]
-platform = espressif32
-board = featheresp32
-framework = arduino
-monitor_speed = 115200
-lib_deps =
-    ttlappalainen/NMEA2000-library
-    ttlappalainen/NMEA2000_esp32
+```bash
+cd SailinGrace-esp32/firmware-n2ksim
+pio run -t upload && pio device monitor      # 115200 baud
 ```
 
-`src/main.cpp` — reference sketch, **not yet compiled or bench-run**:
+It sends exactly the profile above. The serial monitor prints one line per
+second — that is the **script truth** the other nodes are compared with:
 
-```cpp
-// SailinGrace N2K bench sensor simulator. Sends the scripted profile in
-// docs/bench_test.md. Pins avoid HUZZAH32 SD (33, 5/18/19) and LED (13).
-#define ESP32_CAN_TX_PIN GPIO_NUM_32
-#define ESP32_CAN_RX_PIN GPIO_NUM_27
-#include <Arduino.h>
-#include <math.h>
-#include <NMEA2000_CAN.h>   // picks the ESP32 TWAI backend
-#include <N2kMessages.h>
-
-const unsigned long TxPGNs[] PROGMEM = {127250L, 128259L, 128267L,
-                                        129025L, 129026L, 130306L, 0};
-
-double lat = 41.4500, lon = -71.3200;
-uint8_t sid = 0;
-unsigned long next10 = 0, next1 = 0, last = 0;
-
-void setup() {
-  Serial.begin(115200);
-  NMEA2000.SetProductInformation("SG-SIM-0001", 100,
-      "SailinGrace N2K bench sim", "0.1.0", "0.1.0");
-  NMEA2000.SetDeviceInformation(424242, 130, 25, 2046);
-  NMEA2000.SetMode(tNMEA2000::N2km_NodeOnly, 42);   // preferred source addr
-  NMEA2000.ExtendTransmitMessages(TxPGNs);
-  NMEA2000.EnableForward(false);
-  NMEA2000.Open();
-  last = millis();
-}
-
-void loop() {
-  NMEA2000.ParseMessages();          // address claim, requests (126996 etc.)
-  unsigned long now = millis();
-  double t   = fmod(now / 1000.0, 120.0);
-  double aws = t < 60 ? 10.0 : 20.0;                          // kn
-  double awa = t < 40 ? 30.0 : (t < 80 ? 45.0 : 330.0);       // deg, 0..360
-  double hdg = fmod(350.0 + t / 6.0, 360.0);                  // deg
-  const double sog = 7.0, bsp = 6.5, depth = 25.0;
-
-  if (now >= next10) {               // 10 Hz group
-    next10 = now + 100;
-    sid = (sid + 1) % 253;
-    double dt = (now - last) / 1000.0; last = now;
-    double d  = KnotsToms(sog) * dt;                         // metres
-    lat += d * cos(DegToRad(hdg)) / 111320.0;
-    lon += d * sin(DegToRad(hdg)) / (111320.0 * cos(DegToRad(lat)));
-
-    tN2kMsg m;
-    SetN2kWindSpeed(m, sid, KnotsToms(aws), DegToRad(awa), N2kWind_Apparent);
-    NMEA2000.SendMsg(m);
-    SetN2kHeading(m, sid, DegToRad(hdg), N2kDoubleNA, N2kDoubleNA, N2khr_magnetic);
-    NMEA2000.SendMsg(m);
-    SetN2kCOGSOGRapid(m, sid, N2khr_true, DegToRad(hdg), KnotsToms(sog));
-    NMEA2000.SendMsg(m);
-    SetN2kLatLonRapid(m, lat, lon);
-    NMEA2000.SendMsg(m);
-  }
-  if (now >= next1) {                // 1 Hz group
-    next1 = now + 1000;
-    tN2kMsg m;
-    SetN2kBoatSpeed(m, sid, KnotsToms(bsp), N2kDoubleNA, N2kSWRT_Paddle_wheel);
-    NMEA2000.SendMsg(m);
-    SetN2kWaterDepth(m, sid, depth, 0.0);
-    NMEA2000.SendMsg(m);
-    Serial.printf("t=%5.1f aws=%.0f awa=%.0f hdg=%.1f\n", t, aws, awa, hdg);
-  }
-}
+```
+t= 42.0 src=42 aws=10kn awa=45 hdg=357.0 bsp=6.5 sog=7.0 depth=25.0 lat=41.45010 lon=-71.32000
 ```
 
-Flash with `pio run -t upload && pio device monitor`. The serial log is the
-**script truth** to compare against.
+Build-verified (`espressif32@6.9.0`, `NMEA2000-library@4.25.1`,
+`NMEA2000_esp32@1.0.3`); first hardware run is Level 3 below.
 
 > The ESP32 needs **another node on the bus** to ACK its frames. Alone, it
-> goes error-passive / bus-off — that's CAN, not a bug. Test it with the
-> laptop or Pi attached.
+> goes error-passive / bus-off and prints `WARN: SendMsg failed` — that's
+> CAN, not a bug. Test it with the laptop or Pi attached.
 
 ## Laptop setup
 
