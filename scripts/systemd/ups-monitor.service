@@ -2,7 +2,7 @@
 #
 # Polls the on-board INA219 and triggers `systemctl poweroff` when the
 # 2× 18650 pack drops below the cutoff voltage, giving systemd time to
-# flush the SQLite WAL and unmount cleanly. Without this, the UPS just
+# flush pending writes and unmount cleanly. Without this, the UPS just
 # runs the Pi until the cells flatline, then drops the rail mid-write —
 # defeating the point of having a UPS.
 #
@@ -19,6 +19,11 @@
 #
 # Logs:
 #   journalctl -u ups-monitor -f
+
+# The /home/pi/SailinGrace paths (and User=pi / /home/pi below) are
+# defaults: setup_pi.sh rewrites them to the actual repo location, login
+# user and home when it installs this unit. Edit them by hand if you copy
+# the unit manually.
 
 [Unit]
 Description=Waveshare UPS HAT (D) battery monitor

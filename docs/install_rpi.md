@@ -228,13 +228,13 @@ Tune via env vars on the systemd unit (`scripts/systemd/ups-monitor.service`):
 
 ## Pi-side raw SignalK delta logger (enabled by default)
 
-`scripts/pi/sailingrace-logger.service` runs `scripts/capture_signalk.py` continuously against the local signalk-server, rotating to a new file at UTC midnight. Output lands in `/home/pi/sailingrace-logs/signalk_<YYYY-MM-DD>.log` — newline-delimited JSON, timestamped. **This is the relay Pi — the logger is not the SailinGrace app, just a disk capture.**
+`scripts/pi/sailingrace-logger.service` runs `scripts/capture_signalk.py` continuously against the local signalk-server, rotating to a new file at UTC midnight. Output lands in `~/sailingrace-logs/signalk_<YYYY-MM-DD>.log` — newline-delimited JSON, timestamped. **This is the relay Pi — the logger is not the SailinGrace app, just a disk capture.**
 
 `scripts/setup_pi.sh` installs *and enables* it as part of the one install (it also creates the `.venv` and installs the `websockets` dep the capture needs). Confirm it's running:
 
 ```bash
 journalctl -u sailingrace-logger -f       # confirm it's tailing deltas
-ls -la /home/pi/sailingrace-logs/          # see the rolling file
+ls -la ~/sailingrace-logs/          # see the rolling file
 ```
 
 ### It can't fill the SD card
@@ -292,7 +292,7 @@ python3 nmea0183_simulator.py --transport serial --serial-device /dev/ttyUSB0 --
 ```
 
 It models the same deterministic boat as the shore-side
-`scripts/signalk_simulator.py` (Newport → Bermuda, 6.5 kt, sinusoidal
+`scripts/signalk_simulator.py` in the main SailinGrace repo (Newport → Bermuda, 6.5 kt, sinusoidal
 wind) but emits real NMEA 0183 sentences — RMC, VHW, HDG, MWV, MWD, plus
 XDR/ROT so the IMU-heel and gyro-yaw capabilities light up. Knobs:
 `--bsp --tws --twd --bearing --hz`, and `--no-imu` / `--no-mwd` to test
@@ -388,7 +388,7 @@ sudo .venv/bin/python scripts/discover_signals.py scan --sweep
 # Record raw data + a classification summary, to work out a source's parse
 # format offline before trusting it (this is the "use it first" workflow):
 .venv/bin/python scripts/discover_signals.py capture --duration 120 --out-dir data/discovery
-#   → data/discovery/<ts>_<channel>.log   (raw samples)
+#   → data/discovery/<ts>_<channel>.log   (every raw line/frame captured)
 #   → data/discovery/<ts>_summary.json    (sentences/PGNs/paths + rates per channel)
 
 # Wire the relay to the best live source, headlessly (the boat-day path):
@@ -458,7 +458,7 @@ If the laptop joins the Pi's AP for instruments, that Wi-Fi radio is now busy an
 ```bash
 sudo bash scripts/uninstall.sh                        # preview
 sudo bash scripts/uninstall.sh --confirm              # actually remove
-sudo bash scripts/uninstall.sh --confirm --archive-logs   # copy logs + DB to /tmp first
+sudo bash scripts/uninstall.sh --confirm --archive-logs   # copy logs + data/ to ~/sailingrace-uninstall-<ts>/ first
 sudo bash scripts/uninstall.sh --confirm --remove-repo    # nuke the clone too
 ```
 

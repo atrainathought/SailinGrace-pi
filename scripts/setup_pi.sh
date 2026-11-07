@@ -70,7 +70,6 @@ append_if_missing /boot/firmware/config.txt "# PiCAN-M (NMEA 2000 HAT)" <<'EOF'
 dtparam=spi=on
 dtparam=i2c_arm=on
 dtoverlay=mcp2515-can0,oscillator=16000000,interrupt=25
-dtoverlay=spi-bcm2835-overlay
 EOF
 
 # ── 3. can0 persistence via systemd-networkd ─────────────────────────
@@ -140,13 +139,29 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" && pwd)"  # :-. for curl | 
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 HAVE_REPO=0
 
-# Copy a systemd unit into place, rewriting the hard-coded
-# /home/pi/SailinGrace install path to wherever this repo/bundle actually
-# lives. Lets the units work whether you cloned the full repo, unpacked a
-# tarball, or cloned a standalone SailinGrace-pi repo to any path.
+# The login user the services run as / whose home holds the logs and
+# ~/.signalk. Pi OS images since 2022 have no default `pi` user (Imager
+# asks for a name), so never assume it. Under sudo, use the invoking user.
+RUN_USER="${SUDO_USER:-$(id -un)}"
+RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
+RUN_HOME="${RUN_HOME:-$HOME}"
+if [ "$RUN_USER" = root ]; then
+  warn "running as root without sudo — services will run as root and log under $RUN_HOME"
+  warn "→ re-run as your normal user (the script uses sudo itself) to avoid that"
+fi
+
+# Copy a systemd unit into place, rewriting the hard-coded defaults the
+# units ship with: the /home/pi/SailinGrace install path → wherever this
+# repo/bundle actually lives, User=pi → $RUN_USER, and the remaining
+# /home/pi paths (logs, ~/.signalk) → $RUN_HOME. The repo path goes through
+# a placeholder so the home rewrite can't touch it.
 install_unit() {
   local src="$1" dest="/etc/systemd/system/$(basename "$1")"
-  sed "s#/home/pi/SailinGrace#${REPO_ROOT}#g" "$src" | sudo tee "$dest" >/dev/null
+  sed -e "s#/home/pi/SailinGrace#@@SG_REPO@@#g" \
+      -e "s#/home/pi\b#${RUN_HOME}#g" \
+      -e "s#^User=pi\$#User=${RUN_USER}#" \
+      -e "s#@@SG_REPO@@#${REPO_ROOT}#g" \
+      "$src" | sudo tee "$dest" >/dev/null
 }
 if [ -f "$REPO_ROOT/scripts/capture_signalk.py" ]; then
   HAVE_REPO=1
@@ -200,7 +215,7 @@ if [ "$HAVE_REPO" = 1 ] \
   # the unit is enabled and will come up on the post-setup reboot.
   sudo systemctl enable --now sailingrace-logger \
     || warn "logger didn't start yet (signalk-server not bootstrapped?) — enabled for next boot"
-  log "→ logs in /home/pi/sailingrace-logs/signalk_<date>.log"
+  log "→ logs in $RUN_HOME/sailingrace-logs/signalk_<date>.log"
   log "→ disk-safe: 14d age cap, 4000MB size cap, 1000MB free floor (tune in the unit)"
   log "→ feeds the post-trip pipeline-adjustment loop (PROJECT.md #15-19)"
 fi

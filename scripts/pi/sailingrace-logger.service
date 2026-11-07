@@ -18,6 +18,11 @@
 # free-space floor below which it stops writing rather than fill the
 # card). Tune the values below to your SD card.
 
+# The /home/pi/SailinGrace paths (and User=pi / /home/pi below) are
+# defaults: setup_pi.sh rewrites them to the actual repo location, login
+# user and home when it installs this unit. Edit them by hand if you copy
+# the unit manually.
+
 [Unit]
 Description=SailinGrace raw SignalK delta logger
 Documentation=https://github.com/atrainathought/SailinGrace

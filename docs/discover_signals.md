@@ -27,12 +27,13 @@ scope here, and every command below limits probing with
 
 ## Before you start
 
-Run everything on the Pi (over SSH or USB-C console). The repo lives at
-`/home/pi/SailinGrace-pi` and the Python deps are in its venv. The CAN
+Run everything on the Pi (over SSH or USB-C console). The examples assume
+the repo is at `~/SailinGrace-pi` (any path and login user work —
+`setup_pi.sh` adapts the services to both) and the Python deps are in its venv. The CAN
 channel needs `sudo` (it brings `can0` up via SocketCAN).
 
 ```bash
-cd /home/pi/SailinGrace-pi
+cd ~/SailinGrace-pi
 ```
 
 For an N2K tap you need: the PiCAN-M connected to a **powered** backbone
@@ -84,7 +85,8 @@ summary so you can confirm the parse format offline. This is the
 (Add `sudo` if you're including the `can` channel.) It writes, under
 `data/discovery/`:
 
-- `<timestamp>_<channel>.log` — the raw samples
+- `<timestamp>_<channel>.log` — every raw line seen during the capture
+  (NMEA 0183 sentences; for `can0`, candump-style `<utc> can0 <id>#<data>`)
 - `<timestamp>_summary.json` — sentences/PGNs/paths + per-channel rates
 
 Inspect `_summary.json` to confirm the sentences/PGNs are what you expect
@@ -126,7 +128,7 @@ curl -s http://localhost:3000/signalk/v1/api/vessels/self | head
 
 # The Pi-side logger is capturing the new deltas:
 journalctl -u sailingrace-logger -n 20 --no-pager
-tail -n 5 /home/pi/sailingrace-logs/signalk_$(date -u +%F).log
+tail -n 5 ~/sailingrace-logs/signalk_$(date -u +%F).log
 ```
 
 The logger's capture-stats `deltas/s` should now be non-zero and `paths:`

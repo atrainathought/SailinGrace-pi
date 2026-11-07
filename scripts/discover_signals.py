@@ -77,6 +77,15 @@ NMEA_UDP_PORTS = (2000, 10110, 50000)
 SIGNALK_PORTS = (3000,)
 DEFAULT_BAUDS = (4800, 38400)
 CAN_IFACE = "can0"
+# signalk-server's own NMEA 0183 TCP *output* (on by default). Probing it on
+# this Pi would "discover" our relay's own re-emitted stream and could wire
+# signalk-server back into itself, so it is never treated as a source.
+SELF_NMEA_TCP_PORT = int(os.environ.get("SIGNALK_NMEA_TCP_PORT", "10110"))
+
+# Set by `capture` mode: probers then keep every raw line/frame they see (not
+# just the few samples the report shows), so the capture is usable for
+# parser work.
+_KEEP_RAW = False
 
 
 def _real_home() -> Path:
@@ -119,8 +128,9 @@ class Probe:
     live: bool = False
     rate_hz: float = 0.0       # messages/sentences per second observed
     detail: dict = field(default_factory=dict)   # {"sentences": {...}} or {"pgns": {...}} or {"paths": {...}}
-    samples: list = field(default_factory=list)   # a few raw lines for the report / format work
+    samples: list = field(default_factory=list)   # a few raw lines for the report
     error: str = ""
+    raw: list = field(default_factory=list)       # every raw line (capture mode only)
 
     def score(self) -> float:
         """Rank live sources: protocol richness × rate. N2K and fused 0183
@@ -219,6 +229,10 @@ def probe_can(duration: float, iface: str = CAN_IFACE) -> Probe:
         n += 1
         if len(pr.samples) < 8:
             pr.samples.append(f"PGN {pgn} (id={can_id:08X})")
+        if _KEEP_RAW:
+            # candump-style: "<utc> can0 <id>#<data hex>"
+            dlc = min(frame[4], 8)
+            pr.raw.append(f"{now_iso()} {iface} {can_id:08X}#{frame[8:8 + dlc].hex().upper()}")
     s.close()
     pr.live = n > 0
     pr.rate_hz = n / max(duration, 0.1)
@@ -242,7 +256,16 @@ def probe_serial(duration: float, devices: list[str], bauds: tuple[int, ...]) ->
         p = Probe(channel="serial", transport="serial")
         p.error = "pyserial not installed (pip install pyserial)"
         return [p]
+    claimed = _signalk_claimed()
     for dev in devices:
+        if os.path.realpath(dev) in claimed["serial"]:
+            # signalk-server already has this port open; reading it here
+            # would steal bytes from the live relay.
+            pr = Probe(channel=f"{dev}@{claimed['serial'][os.path.realpath(dev)]}",
+                       transport="serial", protocol="NMEA0183")
+            pr.error = "in use by signalk-server (already relayed)"
+            out.append(pr)
+            continue
         for baud in bauds:
             pr = Probe(channel=f"{dev}@{baud}", transport="serial", protocol="NMEA0183")
             lines: list[bytes] = []
@@ -262,6 +285,8 @@ def probe_serial(duration: float, devices: list[str], bauds: tuple[int, ...]) ->
             pr.rate_hz = len([l for l in lines if _NMEA_RE.match(l.strip())]) / max(duration / len(bauds), 0.1)
             pr.detail = cls
             pr.samples = [l.decode(errors="replace").strip() for l in lines[:8]]
+            if _KEEP_RAW:
+                pr.raw = [l.decode(errors="replace").rstrip("\r\n") for l in lines]
             out.append(pr)
             if pr.live:        # found the right baud — don't try the others
                 break
@@ -271,8 +296,15 @@ def probe_serial(duration: float, devices: list[str], bauds: tuple[int, ...]) ->
 def probe_udp(duration: float, ports: tuple[int, ...]) -> list[Probe]:
     out: list[Probe] = []
     socks = []
+    claimed = _signalk_claimed()
     for port in ports:
         pr = Probe(channel=f"udp:{port}", transport="udp", protocol="NMEA0183")
+        if port in claimed["udp"]:
+            # signalk-server is bound here; a second listener would fail to
+            # bind or split the datagrams with the live relay.
+            pr.error = "in use by signalk-server (already relayed)"
+            out.append(pr)
+            continue
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -304,21 +336,31 @@ def probe_udp(duration: float, ports: tuple[int, ...]) -> list[Probe]:
         pr.rate_hz = sum(cls["sentences"].values()) / max(duration, 0.1)
         pr.detail = cls
         pr.samples = [l.decode(errors="replace").strip() for l in buf[port][:8]]
+        if _KEEP_RAW:
+            pr.raw = [l.decode(errors="replace").rstrip("\r") for l in buf[port]]
     return out
+
+
+def local_ipv4_addrs() -> list[str]:
+    """Every non-loopback IPv4 address this Pi holds (wlan0, eth0, usb0…)."""
+    addrs: list[str] = []
+    rc, out = _run(["ip", "-4", "-o", "addr", "show"])
+    if rc == 0:
+        for line in out.splitlines():
+            m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)/", line)
+            if m and not line.split()[1].startswith("lo") and m.group(1) not in addrs:
+                addrs.append(m.group(1))
+    return addrs
 
 
 def local_ipv4_subnets() -> list[str]:
     """Return '/24' network prefixes (e.g. '192.168.1.') for each non-loopback
     IPv4 the Pi holds — wlan0, eth0, usb0, etc."""
     nets: list[str] = []
-    rc, out = _run(["ip", "-4", "-o", "addr", "show"])
-    if rc == 0:
-        for line in out.splitlines():
-            m = re.search(r"inet (\d+\.\d+\.\d+)\.\d+/", line)
-            if m and not line.split()[1].startswith("lo"):
-                pref = m.group(1) + "."
-                if pref not in nets:
-                    nets.append(pref)
+    for ip in local_ipv4_addrs():
+        pref = ip.rsplit(".", 1)[0] + "."
+        if pref not in nets:
+            nets.append(pref)
     return nets
 
 
@@ -377,34 +419,42 @@ def probe_tcp_sweep(duration: float, hosts: list[str], ports: tuple[int, ...],
     if sweep:
         for pref in local_ipv4_subnets():
             targets.update(f"{pref}{i}" for i in range(1, 255))
-    # Fast open-port scan across (host, port) pairs.
-    pairs = [(h, p) for h in targets for p in ports]
+    # Fast open-port scan across (host, port) pairs — minus our own
+    # signalk-server's NMEA output, which would just echo the relay back.
+    own = {"127.0.0.1", "localhost", *local_ipv4_addrs()}
+    pairs = [(h, p) for h in targets for p in ports
+             if not (h in own and p == SELF_NMEA_TCP_PORT)]
     open_pairs: list[tuple[str, int]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=64) as ex:
         futs = {ex.submit(_port_open, h, p): (h, p) for h, p in pairs}
         for fut in concurrent.futures.as_completed(futs):
             if fut.result():
                 open_pairs.append(futs[fut])
-    out: list[Probe] = []
-    for host, port in open_pairs:
-        pr = Probe(channel=f"tcp:{host}:{port}", transport="tcp", protocol="NMEA0183")
-        lines = _read_tcp(host, port, duration)
-        cls = classify_nmea0183(lines)
-        pr.live = bool(cls["sentences"])
-        pr.rate_hz = sum(cls["sentences"].values()) / max(duration, 0.1)
-        pr.detail = cls
-        pr.samples = [l.decode(errors="replace").strip() for l in lines[:8]]
-        if not pr.live and lines:
-            pr.error = "open but not NMEA 0183"
-        out.append(pr)
-    return out
+    return [probe_tcp(host, port, duration) for host, port in open_pairs]
+
+
+def probe_tcp(host: str, port: int, duration: float) -> Probe:
+    """Read and classify one NMEA-0183-over-TCP endpoint."""
+    pr = Probe(channel=f"tcp:{host}:{port}", transport="tcp", protocol="NMEA0183")
+    lines = _read_tcp(host, port, duration)
+    cls = classify_nmea0183(lines)
+    pr.live = bool(cls["sentences"])
+    pr.rate_hz = sum(cls["sentences"].values()) / max(duration, 0.1)
+    pr.detail = cls
+    pr.samples = [l.decode(errors="replace").strip() for l in lines[:8]]
+    if _KEEP_RAW:
+        pr.raw = [l.decode(errors="replace").rstrip("\r") for l in lines]
+    if not pr.live and lines:
+        pr.error = "open but not NMEA 0183"
+    return pr
 
 
 def probe_signalk(duration: float, hosts: list[str], extra_hosts: list[str]) -> list[Probe]:
     """Detect SignalK servers via their HTTP discovery endpoint; optionally
     read the WS delta stream to count paths."""
-    targets = {"127.0.0.1", "localhost"}
-    targets.update(extra_hosts)
+    # 127.0.0.1 only — "localhost" is the same server and doubled the scan.
+    targets = {"127.0.0.1"}
+    targets.update(h for h in extra_hosts if h != "localhost")
     out: list[Probe] = []
     for host in targets:
         for port in SIGNALK_PORTS:
@@ -475,6 +525,46 @@ def scan_all(duration: float, *, sweep: bool, extra_hosts: list[str],
     return results
 
 
+def probe_source(source: str, duration: float) -> Probe:
+    """Probe exactly the channel named by `source` (as `scan` prints it),
+    instead of re-scanning everything. Lets `apply --source` reach a TCP
+    host that was only found by `--sweep`, and keeps apply fast."""
+    if source.startswith("tcp:"):
+        try:
+            _, host, port = source.split(":")
+            return probe_tcp(host, int(port), duration)
+        except ValueError:
+            pass
+    elif source.startswith("udp:"):
+        try:
+            port = int(source.split(":", 1)[1])
+        except ValueError:
+            port = None
+        if port is not None:
+            if port in _signalk_claimed()["udp"]:
+                return Probe(channel=source, transport="udp", protocol="NMEA0183", live=True,
+                             detail={"note": "already in use by signalk-server"})
+            return probe_udp(duration, (port,))[0]
+    elif "@" in source:
+        dev, _, baud = source.rpartition("@")
+        if baud.isdigit():
+            if os.path.realpath(dev) in _signalk_claimed()["serial"]:
+                return Probe(channel=source, transport="serial", protocol="NMEA0183", live=True,
+                             detail={"note": "already in use by signalk-server"})
+            pr = probe_serial(duration, [dev], (int(baud),))[0]
+            pr.channel = source
+            return pr
+    elif source.startswith("signalk:"):
+        pr = Probe(channel=source, transport="signalk")
+        pr.error = "a SignalK server can't be relayed via a signalk-server provider"
+        return pr
+    elif re.fullmatch(r"v?can\d+", source):
+        return probe_can(duration, source)
+    pr = Probe(channel=source, transport="?")
+    pr.error = "unrecognised source id (use a channel exactly as `scan` prints it)"
+    return pr
+
+
 def print_report(results: list[Probe]) -> None:
     live = [r for r in results if r.live]
     print(f"\n── signal discovery @ {now_iso()} ──")
@@ -491,6 +581,29 @@ def print_report(results: list[Probe]) -> None:
 
 
 # ── signalk-server config (headless apply) ────────────────────────────
+def _signalk_claimed() -> dict:
+    """Serial devices (realpath → baud) and UDP ports that an *enabled*
+    signalk-server connection already holds, so probes leave them alone."""
+    claimed: dict = {"serial": {}, "udp": set()}
+    try:
+        settings = json.loads(SIGNALK_SETTINGS.read_text())
+    except (OSError, ValueError):
+        return claimed
+    for p in settings.get("pipedProviders") or []:
+        if not p.get("enabled", True):
+            continue
+        for el in p.get("pipeElements") or []:
+            sub = ((el.get("options") or {}).get("subOptions") or {})
+            if sub.get("type") == "serial" and sub.get("device"):
+                claimed["serial"][os.path.realpath(sub["device"])] = sub.get("baudrate", 4800)
+            elif sub.get("type") == "udp" and sub.get("port"):
+                try:
+                    claimed["udp"].add(int(sub["port"]))
+                except (TypeError, ValueError):
+                    pass
+    return claimed
+
+
 def build_provider(pr: Probe) -> dict:
     """Translate a live Probe into a signalk-server pipedProviders entry.
     Uses the documented providers/simple shape."""
@@ -499,7 +612,7 @@ def build_provider(pr: Probe) -> dict:
     if pr.transport == "can":
         otype, sub = "NMEA2000", {"type": "canbus-canboatjs", "interface": pr.channel}
     elif pr.transport == "serial":
-        dev, _, baud = pr.channel.partition("@")
+        dev, _, baud = pr.channel.rpartition("@")
         otype, sub = "NMEA0183", {"type": "serial", "device": dev,
                                   "baudrate": int(baud or 4800), "validateChecksum": True}
     elif pr.transport == "udp":
@@ -563,12 +676,26 @@ def apply_source(pr: Probe) -> int:
     # Drop any prior connection we added, and disable others so two sources
     # can't double-feed the singleton estimators downstream.
     providers = [p for p in providers if not str(p.get("id", "")).startswith("sg-")]
+    disabled = [str(p.get("id", "?")) for p in providers if p.get("enabled", True)]
     for p in providers:
         p["enabled"] = False
     providers.append(provider)
     settings["pipedProviders"] = providers
-    SIGNALK_SETTINGS.write_text(json.dumps(settings, indent=2))
+    # Atomic replace (keeping the original owner/mode) so a crash mid-write
+    # can't leave signalk-server with a truncated settings.json.
+    tmp = SIGNALK_SETTINGS.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(settings, indent=2))
+    st = SIGNALK_SETTINGS.stat()
+    try:
+        os.chown(tmp, st.st_uid, st.st_gid)
+    except OSError:
+        pass
+    os.chmod(tmp, st.st_mode & 0o7777)
+    os.replace(tmp, SIGNALK_SETTINGS)
     print(f"wrote connection '{provider['id']}' → {SIGNALK_SETTINGS}")
+    if disabled:
+        print(f"disabled existing connection(s) so two sources can't double-feed: "
+              f"{', '.join(disabled)}  (re-enable in the admin UI; backup: {backup})")
 
     print("restarting signalk-server…")
     _signalk_restart()
@@ -576,13 +703,8 @@ def apply_source(pr: Probe) -> int:
     if _signalk_has_data():
         print(f"✓ relay live on this source: {pr.channel}")
         print("  laptop URLs:")
-        for pref in local_ipv4_subnets():
-            # show the Pi's own address on each interface
-            rc, out = _run(["ip", "-4", "-o", "addr", "show"])
-            for line in out.splitlines():
-                m = re.search(r"inet (%s\d+)/" % re.escape(pref), line)
-                if m:
-                    print(f"    ws://{m.group(1)}:3000/signalk/v1/stream?subscribe=self")
+        for ip in local_ipv4_addrs():
+            print(f"    ws://{ip}:3000/signalk/v1/stream?subscribe=self")
         return 0
     print("✗ no data after restart — rolling back config", file=sys.stderr)
     shutil.copy2(backup, SIGNALK_SETTINGS)
@@ -600,9 +722,12 @@ def capture_mode(results: list[Probe], out_dir: Path) -> None:
                "live": r.live, "rate_hz": round(r.rate_hz, 2),
                "detail": r.detail, "samples": r.samples, "error": r.error}
         summary["channels"].append(rec)
-        if r.samples:
+        lines = r.raw or r.samples
+        if lines:
             safe = re.sub(r"[^a-zA-Z0-9]+", "_", r.channel).strip("_")
-            (out_dir / f"{stamp}_{safe}.log").write_text("\n".join(str(s) for s in r.samples) + "\n")
+            rec["raw_file"] = f"{stamp}_{safe}.log"
+            rec["raw_lines"] = len(lines)
+            (out_dir / rec["raw_file"]).write_text("\n".join(str(s) for s in lines) + "\n")
     sfile = out_dir / f"{stamp}_summary.json"
     sfile.write_text(json.dumps(summary, indent=2))
     print(f"capture written to {out_dir}/ ({stamp}_*) — summary: {sfile}")
@@ -634,15 +759,19 @@ def main() -> int:
     channels = {c.strip() for c in args.channels.split(",") if c.strip()}
 
     if args.mode == "apply" and args.source:
-        # Probe just enough to characterise the named source, then apply.
-        results = scan_all(args.duration, sweep=args.sweep, extra_hosts=args.hosts,
-                           channels=channels)
-        match = next((r for r in results if r.channel == args.source), None)
-        if match is None or not match.live:
-            print(f"ERROR: source '{args.source}' not live (run `scan` to list).",
+        # Probe only the named source — no full re-scan, and no sweep needed
+        # to re-find a TCP host the original `scan --sweep` turned up.
+        match = probe_source(args.source, args.duration)
+        if not match.live:
+            why = match.error or "no data"
+            print(f"ERROR: source '{args.source}' not live ({why}); run `scan` to list.",
                   file=sys.stderr)
             return 2
         return apply_source(match)
+
+    if args.mode == "capture":
+        global _KEEP_RAW
+        _KEEP_RAW = True
 
     results = scan_all(args.duration, sweep=args.sweep, extra_hosts=args.hosts,
                        channels=channels)
