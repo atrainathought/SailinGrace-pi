@@ -66,7 +66,7 @@ Wiring (Feather HUZZAH32 — avoids GPIO 33 = SD CS, 5/18/19 = SPI, 13 = LED):
 | — | CANH | 4 (white) |
 | — | CANL | 5 (blue) |
 
-Firmware: [`SailinGrace-esp32/firmware-n2ksim/`](https://github.com/atrainathought/SailinGrace-esp32/tree/master/firmware-n2ksim)
+Firmware: [`SailinGrace-esp32/firmware-n2ksim/`](https://github.com/atrainathought/SailinGrace-esp32/tree/main/firmware-n2ksim)
 (`NMEA2000-library` + `NMEA2000_esp32`, pinned to Arduino-ESP32 core 2.0.x).
 For an ESP32-S3 board, switch to an `NMEA2000_esp32xx`-style TWAI-driver
 backend.

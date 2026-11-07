@@ -68,7 +68,7 @@ SignalK wants −π..π).
 
 ## ESP32 generator
 
-The firmware lives in **[`SailinGrace-esp32/firmware-n2ksim/`](https://github.com/atrainathought/SailinGrace-esp32/tree/master/firmware-n2ksim)**
+The firmware lives in **[`SailinGrace-esp32/firmware-n2ksim/`](https://github.com/atrainathought/SailinGrace-esp32/tree/main/firmware-n2ksim)**
 — a separate PlatformIO project, so the WiFi race logger in `firmware/`
 stays untouched. Same Feather HUZZAH32, different firmware. Wiring is in
 [bench_materials.md § ESP32 node](bench_materials.md#3-esp32-node-sensor-generator)
