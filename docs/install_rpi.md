@@ -466,5 +466,5 @@ Removes SailinGrace systemd units (sailingrace-logger, sailingrace-config, ups-m
 
 ## Tested-on / known-working
 
-- Pi 4B 4 GB, Bookworm 64-bit, PiCAN-M, Waveshare UPS HAT (D), signalk-server 2.x → bench-validated. Not yet validated against a real NMEA 2000 backbone.
+- Pi 4B 4 GB, Bookworm 64-bit, PiCAN-M, Waveshare UPS HAT (D), signalk-server 2.x → bench-validated. Not yet validated against a real NMEA 2000 backbone. Procedure to close that gap: [bench_test.md](bench_test.md).
 - Pi 400, Trixie 64-bit Lite, PiCAN-M (UPS HAT held off — Pi 400 form factor doesn't stack cleanly), signalk-server 2.x → fully bench-validated end-to-end 2026-05-25: can0 UP, signalk-server with Allow Readonly on, SailinGrace on laptop subscribed via `ws://trainapi4.local:3000/...`, `/api/sensors/capabilities` reports `available: true, source: "signalk"`.
