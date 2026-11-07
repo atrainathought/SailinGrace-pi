@@ -313,7 +313,7 @@ Watch one full 120 s cycle and check every row of the profile table at
 | Test | How | Pass |
 |---|---|---|
 | Hot-unplug ESP32 | Pull its drop for 30 s, replug | Pi keeps running; data resumes within ~5 s; SailinGrace freshness indicator goes stale then recovers |
-| Hot-unplug Pi | Pull its drop for 30 s, replug | `can0` recovers on its own; SignalK resumes. ⚠️ `80-can.network` has no `RestartSec=`, so after a **bus-off** can0 may stay down until `ip link set can0 down/up` — if so, add `RestartSec=100ms` under `[CAN]` |
+| Hot-unplug Pi | Pull its drop for 30 s, replug | `can0` recovers on its own; SignalK resumes. `setup_pi.sh` sets `RestartSec=100ms` in `80-can.network` for bus-off recovery — confirm with `ip -details link show can0` (`restart-ms 100`) and that `-statistics` shows a `bus-off` count with the link back in ERROR-ACTIVE |
 | Short CAN_H–CAN_L for 2 s | Jumper at a spare tee (bench only) | Same as above — this forces bus-off deliberately |
 | Bus power cut | Kill 12 V for 10 s | Pi (on its own power) logs the gap, recovers when bus returns |
 | Pi power cut | Pull Pi power / let UPS take over | UPS behaves as configured; log on SD intact, no corruption |

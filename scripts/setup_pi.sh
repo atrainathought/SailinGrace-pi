@@ -83,7 +83,15 @@ Name=can0
 
 [CAN]
 BitRate=250000
+# Auto-recover from bus-off (a short, a hot-unplug, a babbling node).
+# Without this the kernel leaves can0 in BUS-OFF until a manual down/up.
+RestartSec=100ms
 EOF
+elif ! grep -q '^RestartSec=' /etc/systemd/network/80-can.network; then
+  # Older installs wrote the file without bus-off recovery — add it.
+  log "adding RestartSec=100ms (bus-off recovery) to 80-can.network"
+  sudo sed -i '/^\[CAN\]/a RestartSec=100ms' /etc/systemd/network/80-can.network
+  sudo networkctl reload 2>/dev/null && sudo networkctl reconfigure can0 2>/dev/null || true
 else
   log "/etc/systemd/network/80-can.network already exists — skipping"
 fi

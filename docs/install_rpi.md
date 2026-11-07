@@ -187,6 +187,7 @@ Name=can0
 
 [CAN]
 BitRate=250000
+RestartSec=100ms    # auto-recover from bus-off
 EOF
 sudo systemctl enable --now systemd-networkd
 ip -details link show can0    # expect: UP, type can, bitrate 250000
