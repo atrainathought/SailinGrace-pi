@@ -1,5 +1,7 @@
 # Bench test — NMEA 2000 backbone, Pi, ESP32, laptop
 
+Tracked as **N2K-1** in the [SailinGrace backlog](https://github.com/atrainathought/SailinGrace/blob/master/docs/backlog.md#n2k-1-bench-test-the-nmea-2000-path).
+
 How to prove the Pi + PiCAN-M relay works against a **real NMEA 2000 bus**
 before it goes on the boat. The Pi has been bench-validated end-to-end but
 never against a live backbone ([install_rpi.md § Tested-on](install_rpi.md#tested-on--known-working));

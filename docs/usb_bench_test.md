@@ -1,5 +1,7 @@
 # USB bench test — ESP32 + Pi on one dev computer
 
+Tracked as **N2K-1** in the [SailinGrace backlog](https://github.com/atrainathought/SailinGrace/blob/master/docs/backlog.md#n2k-1-bench-test-the-nmea-2000-path).
+
 A cut-down version of [bench_test.md](bench_test.md) for this setup: the
 dev computer has **no N2K adapter**. Instead, the ESP32 and the Pi each
 plug into it over USB, and the two of them talk to each other over CAN.
