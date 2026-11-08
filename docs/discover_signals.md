@@ -149,7 +149,8 @@ bring-up failure. In order of likelihood:
 - **No bus power** — the backbone must be powered and instruments on.
   `candump can0` should show frames; silence means no traffic reaching the
   HAT.
-- **Wrong oscillator** — PiCAN-M is **16 MHz**; some clones are 8 MHz. A
+- **Wrong oscillator** — PiCAN-M is **16 MHz**; some clones are 8 MHz; the
+  Waveshare RS485 CAN HAT is **12 MHz** (`CAN_HAT=waveshare` in `setup_pi.sh`). A
   wrong value in `/boot/firmware/config.txt`
   (`dtoverlay=mcp2515-can0,oscillator=…`) yields a clean-but-deaf `can0`.
   Check the silkscreen on the board.

@@ -76,6 +76,16 @@ backend.
 The laptop's job is to read the copper bus **independently of the Pi**, so
 a disagreement between them points at the Pi.
 
+> **Already have a spare Pi 4B + Waveshare RS485 CAN HAT?** It does this
+> job with **no purchase** (or alongside a laptop adapter). Set it up with
+> `CAN_HAT=waveshare bash scripts/setup_pi.sh`: the HAT's crystal is
+> 12 MHz on current boards (marked 12.000), 8 MHz on old ones. Wiring and
+> termination are in
+> [usb_bench_test.md § reader Pi](usb_bench_test.md#optional-a-reader-pi-pi-4b--waveshare-rs485-can-hat).
+> To reach a backbone it needs one **male** M12 drop cable with bare wires:
+> white → H, blue → L, black → a Pi GND pin (the HAT's terminal has no
+> ground), red unconnected. Give it its own 5 V / 3 A supply.
+
 ### Linux (native)
 
 | Qty | Item | Example | ~$ | Notes |
@@ -121,6 +131,7 @@ Minimum to run the full bench test:
 - [ ] 1–3× drop cables
 - [ ] ESP32: 1× CAN transceiver breakout, 1× M12 field connector, cable
 - [ ] Laptop (Linux): CANable 2.0 + 1× M12 field connector — **or**
-- [ ] Laptop (Windows / both): YDWG-02
+- [ ] Laptop (Windows / both): YDWG-02 — **or**
+- [ ] Spare Pi 4B + Waveshare RS485 CAN HAT (already owned) + 1× male M12 drop cable / field connector + its own 5 V / 3 A supply
 - [ ] Multimeter
 - [ ] (Boat only) 12 V→5 V buck for the ESP32

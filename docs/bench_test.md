@@ -7,12 +7,13 @@ before it goes on the boat. The Pi has been bench-validated end-to-end but
 never against a live backbone ([install_rpi.md § Tested-on](install_rpi.md#tested-on--known-working));
 this procedure closes that gap.
 
-Parts list: **[bench_materials.md](bench_materials.md)**.
+Parts list: **[bench_materials.md](bench_materials.md)**. Every step below
+has a **Linux** and a **Windows** variant for the laptop.
 
 > **No laptop N2K adapter yet?** Use **[usb_bench_test.md](usb_bench_test.md)**:
-> the ESP32 and the Pi each plug into the dev computer over USB and talk to each
-> other over a two-node CAN link. Every step below
-has a **Linux** and a **Windows** variant for the laptop.
+> the ESP32 and the Pi each plug into the dev computer over USB and talk over
+> CAN. If you have a **second Pi with a Waveshare RS485 CAN HAT**, it takes
+> the laptop adapter's place as the independent bus reader below.
 
 ## Roles
 
@@ -34,7 +35,11 @@ another's:
 
 - **ESP32** sends known, scripted sensor values (§ ESP32 generator).
 - **Laptop** reads the copper bus directly — this is the *truth* — and
-  also runs SailinGrace against the Pi's SignalK output.
+  also runs SailinGrace against the Pi's SignalK output. A **reader Pi**
+  (Pi 4B + Waveshare RS485 CAN HAT, set up with `CAN_HAT=waveshare`) can
+  do the bus-reading half instead. Its `can0` takes the Linux commands
+  below unchanged; see
+  [usb_bench_test.md § reader Pi](usb_bench_test.md#optional-a-reader-pi-pi-4b--waveshare-rs485-can-hat).
 - **Pi** is what's being tested: it must turn the bus traffic into correct
   SignalK, log it, and survive faults.
 
@@ -181,7 +186,7 @@ ip -details -statistics link show can0   # UP, bitrate 250000, state ERROR-ACTIV
 candump can0                             # silent is OK with no other node
 ```
 If can0 is UP but never receives anything later: check the PiCAN-M
-oscillator (16 MHz vs 8 MHz clone) first.
+oscillator first: PiCAN-M 16 MHz, Waveshare RS485 CAN HAT 12 MHz (8 MHz on old boards), set with `CAN_HAT=` / `CAN_OSCILLATOR=` in `setup_pi.sh`.
 
 **Laptop:** Linux — same `ip link` check on the CANable. Windows — YDWG-02
 web UI shows it's connected to the bus.

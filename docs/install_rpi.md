@@ -168,9 +168,11 @@ Set the admin password straight away: until you do, every device on the WiFi is 
 sudo raspi-config nonint do_spi 0
 sudo raspi-config nonint do_i2c 0
 
-# 2. PiCAN-M device tree overlay. MCP2515 needs to be declared in
+# 2. CAN HAT device tree overlay. MCP2515 needs to be declared in
 #    /boot/firmware/config.txt with the right oscillator (16 MHz for
 #    PiCAN-M; some clones are 8 MHz — wrong value = silent can0).
+#    Waveshare RS485 CAN HAT: oscillator=12000000 (8000000 on old boards),
+#    plus ,spimaxfrequency=2000000. setup_pi.sh: CAN_HAT=waveshare.
 sudo tee -a /boot/firmware/config.txt <<'EOF'
 dtparam=spi=on
 dtparam=i2c_arm=on
@@ -445,7 +447,7 @@ If the laptop joins the Pi's AP for instruments, that Wi-Fi radio is now busy an
 ## Risks / gotchas
 
 - **SD card wear** — SQLite WAL writes constantly when SignalK ingest is on. Mitigations: A2-rated card; mount `/data` with `noatime`; USB SSD if the boat will be on >1 month at a stretch.
-- **PiCAN-M oscillator** — the most common bring-up failure. PiCAN-M is 16 MHz; clones can be 8 MHz. Wrong value = `can0` comes up clean but receives nothing. Check the silkscreen.
+- **CAN HAT oscillator** — the most common bring-up failure. PiCAN-M is 16 MHz; clones can be 8 MHz. The Waveshare RS485 CAN HAT is 12 MHz (crystal marked 12.000; old boards 8 MHz). Wrong value = `can0` comes up clean but receives nothing. Check the crystal, then re-run `setup_pi.sh` with `CAN_HAT=pican-m|waveshare` and/or `CAN_OSCILLATOR=<Hz>` to fix it in place (a plain re-run leaves the existing line alone).
 - **N2K termination** — backbone must have exactly two 120 Ω terminators. PiCAN-M's on-board jumper should be **OFF** for normal backbone use; ON is only for bench testing the Pi standalone.
 - **Conformal coating** on both HATs before mounting. Salt + humidity will eat unprotected boards in a season.
 - **Power input** — feed the UPS HAT's USB-C input, not the Pi's. Pi's own power port stays on the *output* side of the UPS.

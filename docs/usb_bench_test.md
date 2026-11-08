@@ -24,15 +24,16 @@ plug into it over USB, and the two of them talk to each other over CAN.
 | Layer | Where you read it | What it proves |
 |---|---|---|
 | Script | ESP32 serial monitor | What the generator *meant* to send |
-| Bus | `candump can0` on the Pi (kernel SocketCAN, below canboat-js / SignalK) | What actually crossed the wire |
+| Bus | `candump can0` on the **reader Pi** if you have one (below), else on the Pi under test (kernel SocketCAN, below canboat-js / SignalK) | What actually crossed the wire |
 | Relay | SignalK REST / Data Browser at `10.55.0.1:3000` | What the Pi decoded |
 | App | SailinGrace on the dev computer | What routing / fusion sees |
 
-Without a laptop N2K adapter the bus truth comes from the Pi's own kernel,
-not from a separate device. That's fine for this test, because the kernel
+Without a second CAN interface, the bus truth comes from the Pi's own
+kernel rather than a separate device. That's acceptable, because the kernel
 CAN layer is independent of the canboat-js → SignalK decode path being
-tested. Run the full three-node [bench_test.md](bench_test.md) once you have
-an adapter.
+tested. A **second Pi with a Waveshare RS485 CAN HAT** removes the
+compromise: it becomes a separate bus reader. See
+[Optional: a reader Pi](#optional-a-reader-pi-pi-4b--waveshare-rs485-can-hat).
 
 ---
 
@@ -77,6 +78,65 @@ Two supplies on the Pi's 5 V rail is asking for trouble.
 
 Ground: both boards share the dev computer's USB ground, so you don't need
 a separate ground wire beyond M12 pin 3.
+
+### Optional: a reader Pi (Pi 4B + Waveshare RS485 CAN HAT)
+
+A second Pi 4B with a **Waveshare RS485 CAN HAT** (MCP2515 + a 3.3 V
+transceiver) is a full Linux CAN node. It does the job of the laptop N2K
+adapter in [bench_test.md](bench_test.md):
+- it's the **independent bus reader**, so the PiCAN-M Pi is checked
+  against a separate device;
+- it can **replay recordings** onto a real bus with `canplayer`.
+
+Keep the PiCAN-M Pi as the device under test. It's the boat unit.
+
+**Set it up:**
+
+1. Give it its own hostname (e.g. `sg-reader`, via `raspi-config`), so
+   `.local` names don't clash with the PiCAN-M Pi.
+2. Check the crystal on the HAT. Current boards say **12.000** (12 MHz);
+   older ones are 8 MHz.
+3. Run the setup with the matching HAT setting, then reboot:
+   ```bash
+   CAN_HAT=waveshare bash scripts/setup_pi.sh          # 12 MHz
+   # older 8 MHz board:  CAN_HAT=waveshare CAN_OSCILLATOR=8000000 bash scripts/setup_pi.sh
+   sudo reboot
+   ```
+   It installs everything the boat Pi gets. On the reader you only need
+   `can0` and can-utils, so **don't** add `can0` as a signalk-server source.
+4. Check the HAT came up:
+   ```bash
+   dmesg | grep -i mcp251        # "MCP2515 successfully initialized"
+   ip -details link show can0    # UP, bitrate 250000, restart-ms 100
+   ```
+
+**Reach it:** give it **its own 5 V / 3 A supply** and connect over
+ethernet or WiFi as `sg-reader.local`. Two Pi 4s on the dev computer's
+USB-C ports is more power than most laptops supply. Also, both USB-C links
+default to `10.55.0.1`, so the dev computer couldn't tell them apart.
+
+If you must use USB-C for both, move the reader to another subnet:
+`sudo nmcli connection modify sg-usb ipv4.addresses 10.56.0.1/24 && sudo nmcli connection up sg-usb`.
+Then reach it at `10.56.0.1`. Its config page will ask for the setup
+token there.
+
+**Wire it in.** The HAT's green terminal has **H** and **L** (CAN) and
+**B** / **A** (RS485, unused). It has **no ground terminal**, so take
+ground from a Pi header GND pin (pin 6).
+
+The generic 4-wire lead with a small white plug that comes with some of
+these HATs is **not** an N2K cable: wrong connector, wrong colors. For N2K,
+white = CAN_H and blue = CAN_L.
+
+| Link | Wiring | Termination (two ends only) |
+|---|---|---|
+| **R1. ESP32 ↔ reader only** (quickest first test, no M12 needed) | Three jumper wires: ESP32 transceiver CANH → **H**, CANL → **L**, GND → Pi GND pin 6 | HAT **120R switch, CAN = ON** + 120 Ω at the ESP32 |
+| **R2. ESP32 — reader — PiCAN-M** (three nodes, no backbone) | As R1, plus an M12 **male** pigtail from the same H / L / GND points to the PiCAN-M (white → H, blue → L, black → GND) | ESP32 120 Ω **ON** · HAT switch **OFF** (it's in the middle) · PiCAN-M jumper **ON** |
+| **R3. Backbone** | M12 **male** drop cable → H (white), L (blue), Pi GND (black). **Red (12 V) unconnected:** the HAT has no 12 V input. | HAT switch **OFF**; the backbone's two terminators do it |
+
+In every case, measure **~60 Ω** across H/L with the power off (U3).
+Backbone tees have **female** sockets, so anything plugged into one needs
+a **male** M12.
 
 ### Dev computer software
 
@@ -155,6 +215,12 @@ t=  3.0 src=42 aws=10kn awa=30 hdg=350.5 bsp=6.5 sog=7.0 depth=25.0 lat=… lon=
 
 Leave the serial monitor open for the rest of the test.
 
+**With a reader Pi: quick win (R1).** Before touching the PiCAN-M, wire
+the ESP32 to the reader alone (R1 above). The ESP32's `WARN` lines should
+stop, and `candump can0` on the reader should show the frames listed in U4.
+This proves the ESP32, its transceiver and the firmware with nothing but
+jumper wires. Then move to R2 or R3 for the rest of the test.
+
 ### U3 — Physical link (everything unplugged from USB)
 
 Unplug both USB cables. Connect the CAN link (A or B). Measure across
@@ -198,17 +264,21 @@ sudo python3 ~/SailinGrace-pi/scripts/discover_signals.py scan --channels can --
 - Rates are about 10 Hz for the first four and about 1 Hz for the last two
   (±10 %)
 - Error counters stay at 0
+- **With a reader Pi:** the same `candump` / `discover_signals.py` on the
+  reader shows the **same PGN set and rates** as the Pi under test. If they
+  disagree, the Pi under test is losing frames.
 
 | Symptom | Likely cause |
 |---|---|
-| ESP32 still WARNs, Pi sees nothing | CANH/CANL swapped, TX/RX swapped at the transceiver, or the PiCAN-M oscillator is wrong (16 vs 8 MHz) |
+| ESP32 still WARNs, Pi sees nothing | CANH/CANL swapped, TX/RX swapped at the transceiver, or a wrong oscillator in `config.txt` (PiCAN-M 16 MHz, Waveshare 12 MHz or 8 MHz on old boards); fix it by re-running with `CAN_HAT=` / `CAN_OSCILLATOR=` |
 | Pi sees frames but error counters climb | Bad termination (re-check U3) or a long unshielded pigtail |
 | `can0` drops to BUS-OFF and comes back | That's the bus-off recovery working; find the wiring fault |
 
 ### U5 — Decode on the Pi (independent of SignalK)
 
 canboat decodes the raw frames, so the bytes can be checked without
-going through SignalK:
+going through SignalK. With a reader Pi, run this **on the reader**: it's
+then fully independent of the Pi under test.
 
 ```bash
 # on the Pi — signalk-server bundles canboatjs; install its CLI once:
@@ -297,6 +367,7 @@ curl http://localhost:8000/api/system/setup
 |---|---|---|
 | Unplug the CAN link | Pull it for 30 s, then reconnect | ESP32 WARNs while it's out. The Pi stays up, and data resumes in SignalK within about 5 s. SailinGrace's instrument freshness goes stale, then recovers. |
 | Quiet feed | Pull the CAN link for more than 60 s | The instrument freshness indicator goes red, then recovers when the link is reconnected. No **Switch** banner appears and the pre-race check stays quiet: both act only when a *second* SignalK server is visible. The drop isn't logged anywhere yet (backlog SYS-5). |
+| Unplug the Pi under test (reader fitted) | Pull the PiCAN-M's CAN connection | The ESP32 shows **no** WARNs, because the reader still acknowledges its frames. The reader's `candump` doesn't miss a beat. When the PiCAN-M is reconnected, SignalK resumes. |
 | Reset the ESP32 | Press its reset button | A new address claim on the Pi (`candump` shows PGN 60928 from the sim), and data resumes |
 | Reboot the Pi | `sudo reboot` | ESP32 WARNs until `can0` is back. signalk-server reconnects to can0 by itself after boot. |
 | Force bus-off | Short CANH–CANL for about 2 s with a jumper | `ip -statistics` shows a `bus-off` count of 1 or more, **and** the link is back to ERROR-ACTIVE without you doing anything (restart-ms 100) |
@@ -318,6 +389,10 @@ it later with the **ESP32 unplugged** (the same source address would
 collide): `canplayer -I candump-*.log -l i can0` on the Pi. Then repeat U6
 and U7 without the ESP32.
 
+**With a reader Pi,** record on the reader and replay from the reader.
+That puts real frames on the wire into the PiCAN-M, which is a better test
+than the Pi replaying into its own `can0`.
+
 ---
 
 ## Results sheet
@@ -326,6 +401,7 @@ and U7 without the ESP32.
 |---|---|---|---|---|---|
 | | | | U1 dev ↔ Pi | | throttled: ___  restart-ms: ___ |
 | | | | U2 dev ↔ ESP32 | | port: ___ |
+| | | | U2 R1 ESP32 → reader | | reader crystal: ___ MHz |
 | | | | U3 physical | | Ω: ___  V: ___ / ___ |
 | | | | U4 frames | | rates: |
 | | | | U5 decode | | |
@@ -334,7 +410,7 @@ and U7 without the ESP32.
 | | | | U8 faults | | |
 | | | | U9 golden log | | file: |
 
-Once U1–U8 pass, the Pi's N2K path is proven for this two-node setup. The
-remaining gaps are an independent bus reader (laptop adapter,
-[bench_test.md](bench_test.md) Level 3) and a real backbone with real
-instruments (Level 8).
+Once U1–U8 pass, the Pi's N2K path is proven on the bench. With the reader
+Pi in R2 or R3, that includes an independent bus reader, which covers
+[bench_test.md](bench_test.md) Levels 3–7 without buying a laptop adapter.
+The remaining gap is a real backbone with real instruments (Level 8).
