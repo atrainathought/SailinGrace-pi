@@ -5,7 +5,11 @@ before it goes on the boat. The Pi has been bench-validated end-to-end but
 never against a live backbone ([install_rpi.md § Tested-on](install_rpi.md#tested-on--known-working));
 this procedure closes that gap.
 
-Parts list: **[bench_materials.md](bench_materials.md)**. Every step below
+Parts list: **[bench_materials.md](bench_materials.md)**.
+
+> **No laptop N2K adapter yet?** Use **[usb_bench_test.md](usb_bench_test.md)**:
+> the ESP32 and the Pi each plug into the dev computer over USB and talk to each
+> other over a two-node CAN link. Every step below
 has a **Linux** and a **Windows** variant for the laptop.
 
 ## Roles
