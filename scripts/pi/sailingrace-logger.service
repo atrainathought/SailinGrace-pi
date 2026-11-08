@@ -26,8 +26,10 @@
 [Unit]
 Description=SailinGrace raw SignalK delta logger
 Documentation=https://github.com/atrainathought/SailinGrace
-After=signalk-server.service
-Wants=signalk-server.service
+After=signalk.service signalk-server.service
+# signalk-server-setup installs signalk.service; signalk-server.service covers
+# hand-made units. Wants= on a unit that does not exist is harmless.
+Wants=signalk.service signalk-server.service
 
 [Service]
 Type=simple
