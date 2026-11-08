@@ -1,6 +1,7 @@
 """discover_signals.py: parsing, provider building, source probing, apply."""
 import json
 import socket
+from pathlib import Path
 import threading
 import time
 
@@ -29,6 +30,13 @@ def test_classify_nmea0183_counts_and_ignores_junk():
     assert cls["sentences"] == {"MWV": 2, "RMC": 1, "VDM": 1}
     assert list(cls["sentences"])[0] == "MWV"          # sorted by count
     assert cls["talkers"] == {"II": 2, "GP": 1, "AI": 1}
+
+
+def test_report_line_for_a_can_probe():
+    """PGN keys are ints; the text report used to crash on a live CAN bus."""
+    pr = d.Probe("can0", "can", "NMEA2000", live=True, rate_hz=40,
+                 detail={"pgns": {130306: 100, 127250: 50}})
+    assert "130306,127250" in pr.summary()
 
 
 def test_score_prefers_wind():
@@ -77,6 +85,8 @@ def settings(tmp_path, monkeypatch):
         _provider("hand-udp", {"type": "udp", "port": 2000}),
         _provider("hand-serial", {"type": "serial", "device": "/dev/ttyUSB7", "baudrate": 38400}),
         _provider("off-udp", {"type": "udp", "port": 50000}, enabled=False),
+        _provider("ngt1", {"type": "ngt-1-canboatjs", "device": "/dev/ttyUSB9"}),
+        _provider("odd-baud", {"type": "serial", "device": "/dev/ttyACM3", "baudrate": ""}),
     ]}))
     monkeypatch.setattr(d, "SIGNALK_SETTINGS", path)
     return path
@@ -85,12 +95,30 @@ def settings(tmp_path, monkeypatch):
 def test_signalk_claimed(settings):
     claimed = d._signalk_claimed()
     assert claimed["udp"] == {2000}                       # disabled 50000 not claimed
-    assert claimed["serial"] == {"/dev/ttyUSB7": 38400}
+    assert claimed["serial"] == {"/dev/ttyUSB7": 38400,
+                                 "/dev/ttyUSB9": None,    # N2K gateway: no baud
+                                 "/dev/ttyACM3": None}    # unparseable baud, no crash
+    assert claimed["serial_type"]["/dev/ttyUSB9"] == "ngt-1-canboatjs"
 
 
 def test_signalk_claimed_missing_file(tmp_path, monkeypatch):
     monkeypatch.setattr(d, "SIGNALK_SETTINGS", tmp_path / "nope.json")
-    assert d._signalk_claimed() == {"serial": {}, "udp": set()}
+    assert d._signalk_claimed() == {"serial": {}, "serial_type": {}, "udp": set()}
+
+
+def test_probe_serial_leaves_gateway_device_alone(settings, monkeypatch):
+    if d.serial is None:
+        pytest.skip("pyserial not installed")
+    opened = []
+    monkeypatch.setattr(d.serial, "Serial", lambda *a, **k: opened.append(a) or (_ for _ in ()).throw(OSError("x")))
+    (pr,) = d.probe_serial(0.1, ["/dev/ttyUSB9"], (4800, 38400))
+    assert opened == []                                   # never opened
+    assert pr.relayed and pr.protocol == "NMEA2000" and pr.channel == "/dev/ttyUSB9@?"
+
+
+def test_probe_source_odd_baud_does_not_crash(settings):
+    pr = d.probe_source("/dev/ttyACM3@4800", 0.1)
+    assert not pr.live and "already reads /dev/ttyACM3" in pr.error
 
 
 def test_probe_udp_reports_claimed_port_as_relayed(settings):
@@ -117,12 +145,28 @@ def test_scan_auto_keeps_relayed_source(settings, monkeypatch, capsys):
     other = d.Probe("tcp:192.168.1.40:10110", "tcp", "NMEA0183", live=True, rate_hz=7,
                     detail={"sentences": {"MWV": 70, "RMC": 10}})
     monkeypatch.setattr(d, "scan_all", lambda *a, **k: [other, relayed])
+    monkeypatch.setattr(d, "_signalk_has_data", lambda timeout=25.0: True)
     applied = []
     monkeypatch.setattr(d, "apply_source", lambda pr: applied.append(pr) or 0)
     monkeypatch.setattr(d.sys, "argv", ["discover_signals.py", "scan", "--auto"])
     assert d.main() == 0
     assert applied == []
     assert "keeping it" in capsys.readouterr().out
+
+
+def test_scan_auto_replaces_relay_that_has_no_data(settings, monkeypatch, capsys):
+    """A configured-but-dead relay must not block wiring up a live source."""
+    relayed = d._relayed_probe("udp:2000", "udp")
+    can = d.Probe("can0", "can", "NMEA2000", live=True, rate_hz=40,
+                  detail={"pgns": {130306: 100, 127250: 100}})
+    monkeypatch.setattr(d, "scan_all", lambda *a, **k: [relayed, can])
+    monkeypatch.setattr(d, "_signalk_has_data", lambda timeout=25.0: False)
+    applied = []
+    monkeypatch.setattr(d, "apply_source", lambda pr: applied.append(pr) or 0)
+    monkeypatch.setattr(d.sys, "argv", ["discover_signals.py", "scan", "--auto"])
+    assert d.main() == 0
+    assert [p.channel for p in applied] == ["can0"]
+    assert "no data is arriving" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("source,needle", [
@@ -187,7 +231,8 @@ def test_apply_source_success(settings, monkeypatch, capsys):
 
     data = json.loads(settings.read_text())
     ids = {p["id"]: p["enabled"] for p in data["pipedProviders"]}
-    assert ids == {"hand-udp": False, "hand-serial": False, "off-udp": False, "sg-can0": True}
+    assert ids == {"hand-udp": False, "hand-serial": False, "off-udp": False,
+                   "ngt1": False, "odd-baud": False, "sg-can0": True}
     assert (settings.stat().st_mode & 0o777) == 0o640      # mode kept by the atomic write
     assert settings.with_suffix(".json.bak").exists()
     out = capsys.readouterr().out
@@ -222,19 +267,59 @@ def test_apply_source_needs_settings(tmp_path, monkeypatch):
 
 
 # ── capture ───────────────────────────────────────────────────────────
-def test_can_raw_line_is_candump_log_format():
-    line = d._raw_line((1699999999.1234567, "can0", 0x09FD022A, bytes([1, 2, 0xAB])))
-    assert line == "(1699999999.123457) can0 09FD022A#0102AB"
+@pytest.mark.parametrize("raw_id,data,expect", [
+    (0x09FD022A | socket.CAN_EFF_FLAG, bytes([1, 2, 0xAB]), "09FD022A#0102AB"),   # N2K 29-bit
+    (0x123, bytes([0xFF]), "123#FF"),                                          # 11-bit
+    (0x123 | socket.CAN_RTR_FLAG, b"", "123#R"),                               # RTR
+    (0x09FD022A | socket.CAN_EFF_FLAG | socket.CAN_RTR_FLAG, b"", "09FD022A#R"),
+    (0x004 | socket.CAN_ERR_FLAG, bytes(8), "20000004#0000000000000000"),       # error frame
+])
+def test_can_raw_line_is_candump_log_format(raw_id, data, expect):
+    line = d._raw_line((1699999999.1234567, "can0", raw_id, data))
+    assert line == f"(1699999999.123457) can0 {expect}"
+
+
+def test_line_tally_counts_everything_keeps_little(monkeypatch):
+    monkeypatch.setattr(d, "_KEEP_RAW", False)
+    t = d.LineTally()
+    for i in range(1000):
+        t.add(b"$IIMWV,%d,R*00" % i)
+    t.add(b"junk")
+    assert len(t.lines) == 8 and t.total == 1001 and t.nmea == 1000
+    pr = d.Probe("udp:2000", "udp")
+    t.fill(pr, 10)
+    assert pr.live and pr.rate_hz == 100 and pr.detail["sentences"] == {"MWV": 1000}
+    assert pr.raw == []                                    # scan mode keeps no raw
 
 
 def test_capture_caps_raw_and_records_it(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(d, "MAX_RAW_LINES", 5)
-    pr = d.Probe("udp:2000", "udp", live=True)
-    d._keep_raw(pr, [f"$IIMWV,{i}" for i in range(9)])
+    monkeypatch.setattr(d, "_KEEP_RAW", True)
+    t = d.LineTally()
+    for i in range(9):
+        t.add(b"$IIMWV,%d,R*00" % i)
+    pr = d.Probe("udp:2000", "udp")
+    t.fill(pr, 1)
     assert len(pr.raw) == 5 and pr.raw_truncated
+    assert pr.detail["sentences"] == {"MWV": 9}            # counts aren't capped
     d.capture_mode([pr], tmp_path)
     rec = json.loads(next(tmp_path.glob("*_summary.json")).read_text())["channels"][0]
     assert rec["raw_lines"] == 5 and rec["raw_truncated_at"] == 5
+
+
+def test_capture_gives_new_folders_to_existing_owner(tmp_path, monkeypatch, capsys):
+    """Run as root into a folder that doesn't exist yet: ownership comes
+    from the nearest folder that did exist, and covers the new folders."""
+    calls = []
+    monkeypatch.setattr(d.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(d.os, "chown", lambda p, u, g: calls.append((Path(p), u, g)))
+    out = tmp_path / "logs" / "discovery"                  # neither exists yet
+    pr = d.Probe("udp:2000", "udp", samples=["$IIMWV"])
+    d.capture_mode([pr], out)
+    st = tmp_path.stat()
+    chowned = {p for p, u, g in calls if (u, g) == (st.st_uid, st.st_gid)}
+    assert tmp_path / "logs" in chowned and out in chowned
+    assert any(p.suffix == ".log" for p in chowned) and any(p.suffix == ".json" for p in chowned)
 
 
 def test_capture_writes_every_raw_line(tmp_path, capsys):

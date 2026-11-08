@@ -3,6 +3,7 @@
 # Remove SailinGrace from a boat-side install (Pi or laptop).
 #
 # What it does (each step idempotent, prints what it touches):
+#   0. With --archive-logs / --archive-dir: archives first (step 3 below)
 #   1. Stops + disables sailingrace + sailingrace-logger + ups-monitor
 #      systemd units; removes the unit files
 #   2. Removes the data/license.json + data/settings.json overrides
@@ -12,7 +13,8 @@
 #      before final delete. <dir> is your home by default, or a USB
 #      stick with --archive-dir (the logs can be GBs, and a copy on the
 #      same SD card often won't fit). Space is checked before anything is
-#      removed; a failed copy stops the script before --remove-repo.
+#      removed, the copy runs before any removal, and a failed copy
+#      stops the script with nothing removed.
 #      Never /tmp: it is a RAM-backed tmpfs on Trixie.
 #   4. Optionally removes the repo clone (asked, not assumed)
 #
@@ -49,7 +51,7 @@ while [[ $# -gt 0 ]]; do
     --archive-dir)   ARCHIVE=1; ARCHIVE_TO="${2:?--archive-dir needs a directory}"; shift ;;
     --remove-repo)   REMOVE_REPO=1 ;;
     -h|--help)
-      head -37 "$0" | sed 's/^# //; s/^#//'
+      head -39 "$0" | sed 's/^# //; s/^#//'
       exit 0
       ;;
     *)
@@ -104,7 +106,27 @@ do_or_say() {
   fi
 }
 
-# ── 1. systemd units ────────────────────────────────────────────────
+# ── 1. archive logs + data (opt-in) — FIRST, before anything is removed ──
+
+if [[ "$ARCHIVE" -eq 1 ]]; then
+  ARCHIVE_DIR="$ARCHIVE_TO/sailingrace-uninstall-$(date -u +%Y%m%dT%H%M%SZ)"
+  echo
+  echo "── archive logs + DB to $ARCHIVE_DIR ─────────────────────────"
+  do_or_say "mkdir -p $ARCHIVE_DIR" mkdir -p "$ARCHIVE_DIR"
+  for src in "${ARCHIVE_SRCS[@]}"; do
+    if ! do_or_say "cp -r $src $ARCHIVE_DIR/" cp -r "$src" "$ARCHIVE_DIR/"; then
+      echo "  !! copying $src failed — the archive in $ARCHIVE_DIR is INCOMPLETE." >&2
+      echo "  !! stopping here; nothing has been removed yet. Free space or use --archive-dir." >&2
+      exit 1
+    fi
+  done
+  if [[ "$CONFIRM" -eq 1 ]]; then
+    chown -R "$RUN_USER": "$ARCHIVE_DIR" 2>/dev/null || true
+    echo "  → archived to $ARCHIVE_DIR — copy this off the boat"
+  fi
+fi
+
+# ── 2. systemd units ────────────────────────────────────────────────
 
 echo
 echo "── systemd units ─────────────────────────────────────────────"
@@ -121,7 +143,7 @@ for unit in sailingrace sailingrace-logger sailingrace-config ups-monitor; do
 done
 do_or_say "systemctl daemon-reload"      sudo systemctl daemon-reload
 
-# ── 2. operator-editable config overrides ───────────────────────────
+# ── 3. operator-editable config overrides ───────────────────────────
 
 echo
 echo "── runtime config overrides (UI-edited; not generated data) ──"
@@ -132,26 +154,6 @@ for f in "$REPO_ROOT/data/license.json" "$REPO_ROOT/data/settings.json"; do
 done
 if [[ -d /etc/sailingrace ]]; then
   do_or_say "remove /etc/sailingrace (config UI setup token)" sudo rm -rf /etc/sailingrace
-fi
-
-# ── 3. archive logs + db (opt-in) ───────────────────────────────────
-
-if [[ "$ARCHIVE" -eq 1 ]]; then
-  ARCHIVE_DIR="$ARCHIVE_TO/sailingrace-uninstall-$(date -u +%Y%m%dT%H%M%SZ)"
-  echo
-  echo "── archive logs + DB to $ARCHIVE_DIR ─────────────────────────"
-  do_or_say "mkdir -p $ARCHIVE_DIR" mkdir -p "$ARCHIVE_DIR"
-  for src in "${ARCHIVE_SRCS[@]}"; do
-    if ! do_or_say "cp -r $src $ARCHIVE_DIR/" cp -r "$src" "$ARCHIVE_DIR/"; then
-      echo "  !! copying $src failed — the archive in $ARCHIVE_DIR is INCOMPLETE." >&2
-      echo "  !! stopping here; the repo was not removed. Free space or use --archive-dir." >&2
-      exit 1
-    fi
-  done
-  if [[ "$CONFIRM" -eq 1 ]]; then
-    chown -R "$RUN_USER": "$ARCHIVE_DIR" 2>/dev/null || true
-    echo "  → archived to $ARCHIVE_DIR — copy this off the boat before continuing"
-  fi
 fi
 
 # ── 4. repo removal (opt-in, explicit) ──────────────────────────────

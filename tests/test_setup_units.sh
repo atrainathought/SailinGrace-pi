@@ -6,9 +6,10 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 out="$(mktemp -d)"; trap 'rm -rf "$out"' EXIT
 
-fn="$(sed -n '/^sed_repl()/p; /^install_unit() {/,/^}/p' "$here/scripts/setup_pi.sh")"
+fn="$(sed -n '/^sed_repl()/p; /^unit_paths_ok() {/,/^}/p; /^install_unit() {/,/^}/p' "$here/scripts/setup_pi.sh")"
 [ -n "$fn" ] || { echo "install_unit not found in setup_pi.sh"; exit 1; }
 sudo() { if [ "$1" = tee ]; then cat > "$out/$(basename "$2")"; else "$@"; fi; }
+warn() { echo "warn: $*" >&2; }
 eval "$fn"
 
 # shellcheck disable=SC2034  # read by the eval'd install_unit
@@ -30,9 +31,9 @@ check ups-monitor.service "ExecStart=/home/pi/projects/SailinGrace-pi/.venv/bin/
 if grep -n '^[^#].*/home/pi/SailinGrace\b' "$out"/*.service; then echo "FAIL: unrewritten /home/pi/SailinGrace path"; fail=1; fi
 
 # Awkward paths: '&' and '#' in the repo path, and /home/pi-data must not
-# be mistaken for /home/pi.
+# be mistaken for /home/pi. (Spaces are refused; see below.)
 # shellcheck disable=SC2034  # read by the eval'd install_unit
-REPO_ROOT='/home/bob/boat&sail #2/SailinGrace-pi' RUN_USER=bob RUN_HOME=/home/bob
+REPO_ROOT='/home/bob/boat&sail#2/SailinGrace-pi' RUN_USER=bob RUN_HOME=/home/bob
 cat > "$out/src-odd.service" <<'UNIT'
 User=pi
 ExecStart=/home/pi/SailinGrace/scripts/pi/log_signalk.sh
@@ -42,10 +43,21 @@ Environment=HOME_ONLY=/home/pi
 UNIT
 install_unit "$out/src-odd.service"
 check src-odd.service "User=bob"
-check src-odd.service "ExecStart=/home/bob/boat&sail #2/SailinGrace-pi/scripts/pi/log_signalk.sh"
+check src-odd.service "ExecStart=/home/bob/boat&sail#2/SailinGrace-pi/scripts/pi/log_signalk.sh"
 check src-odd.service "Environment=LOG_DIR=/home/bob/sailingrace-logs"
 check src-odd.service "Environment=SPARE=/home/pi-data/x"
 check src-odd.service "Environment=HOME_ONLY=/home/bob"
+
+# A space (systemd splits on it) or '%' (a systemd specifier) is refused,
+# and no unit is written.
+for bad in '/home/bob/boat sail/SailinGrace-pi' '/home/bob/100%/SailinGrace-pi'; do
+  rm -f "$out/sailingrace-logger.service"
+  if REPO_ROOT="$bad" install_unit "$here/scripts/pi/sailingrace-logger.service" 2>/dev/null; then
+    echo "FAIL: install_unit accepted '$bad'"; fail=1
+  elif [ -e "$out/sailingrace-logger.service" ]; then
+    echo "FAIL: a unit was written for '$bad'"; fail=1
+  fi
+done
 
 [ "$fail" = 0 ] && echo "install_unit: all rewrites OK"
 exit "$fail"

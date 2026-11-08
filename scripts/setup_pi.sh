@@ -158,7 +158,23 @@ fi
 # Escape a value for the replacement side of a `s#…#…#` sed command
 # (backslash, '&' and the '#' delimiter), so a path like ~/boat&sail works.
 sed_repl() { printf '%s' "$1" | sed -e 's/[\\&#]/\\&/g'; }
+# systemd splits ExecStart=/Environment= values on whitespace and expands
+# '%' specifiers, so a repo or home path with either can't go into a unit
+# unquoted. Refuse it with a clear message instead of writing a unit that
+# fails to start.
+unit_paths_ok() {
+  local p
+  for p in "$REPO_ROOT" "$RUN_HOME"; do
+    case "$p" in
+      *[[:space:]%]*)
+        warn "path has a space or '%', which systemd units can't hold: $p"
+        warn "→ move the repo (or use a login without one) and re-run"
+        return 1 ;;
+    esac
+  done
+}
 install_unit() {
+  unit_paths_ok || return 1
   local src="$1" dest repo home user
   dest="/etc/systemd/system/$(basename "$1")"
   repo="$(sed_repl "$REPO_ROOT")"; home="$(sed_repl "$RUN_HOME")"; user="$(sed_repl "$RUN_USER")"
@@ -170,6 +186,10 @@ install_unit() {
       -e "s#@@SG_REPO@@#${repo}#g" \
       "$src" | sudo tee "$dest" >/dev/null
 }
+# Check now, before the venv and units, rather than failing at the first unit.
+if [ -f "$REPO_ROOT/scripts/capture_signalk.py" ] && ! unit_paths_ok; then
+  exit 1
+fi
 if [ -f "$REPO_ROOT/scripts/capture_signalk.py" ]; then
   HAVE_REPO=1
   if [ ! -d "$REPO_ROOT/.venv" ]; then
