@@ -59,7 +59,24 @@ TRUSTED_LOCAL_ADDRS = {a.strip() for a in
                        if a.strip()}
 USB_NET = ipaddress.ip_network(os.environ.get("CONFIG_USB_NET", "10.55.0.0/24"))
 MAX_BODY = 64 * 1024
-LOG_DIR = os.environ.get("LOG_DIR", "/home/pi/sailingrace-logs")
+
+
+
+def _login_home() -> Path:
+    """Home of the login user, even when started with sudo (root's $HOME is
+    /root). The systemd unit sets LOG_DIR / SIGNALK_NODE_SETTINGS
+    explicitly; this is the default for a manual `sudo python3 …` run."""
+    user = os.environ.get("SUDO_USER")
+    if user and user != "root":
+        try:
+            import pwd
+            return Path(pwd.getpwnam(user).pw_dir)
+        except (KeyError, ImportError):
+            pass
+    return Path.home()
+
+
+LOG_DIR = os.environ.get("LOG_DIR", str(_login_home() / "sailingrace-logs"))
 # One scan / capture / apply / join at a time: they bind the same ports and
 # reconfigure the same services.
 JOB_LOCK = threading.Lock()
@@ -79,7 +96,7 @@ TOKEN = _load_token()
 # Where signalk-server keeps its settings — so `apply` writes the right file
 # even though this server runs as root (whose $HOME is /root).
 SIGNALK_SETTINGS = os.environ.get(
-    "SIGNALK_NODE_SETTINGS", "/home/pi/.signalk/settings.json")
+    "SIGNALK_NODE_SETTINGS", str(_login_home() / ".signalk" / "settings.json"))
 
 PAGE = """<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
@@ -159,9 +176,9 @@ async function discover(){log('scanning channels (can take ~20s)…');
   const r=await jget('/api/discover?sweep='+(sweep.checked?1:0));
   const sel=document.getElementById('source');sel.innerHTML='';
   (r.results||[]).filter(x=>x.live&&x.transport!=='signalk').forEach(x=>{
-    const o=document.createElement('option');o.value=x.channel;o.textContent=`${x.channel} (${x.protocol}, ${x.rate_hz}/s)`;sel.appendChild(o);});
+    const o=document.createElement('option');o.value=x.channel;o.textContent=x.relayed?`${x.channel} (already relayed)`:`${x.channel} (${x.protocol}, ${x.rate_hz}/s)`;sel.appendChild(o);});
   document.getElementById('sources').innerHTML =
-    (r.results||[]).map(x=>`<div class="${x.live?'ok':''}">${x.live?'●':'○'} ${esc(x.channel)} — ${esc(x.protocol)||'—'} ${x.rate_hz?esc(x.rate_hz)+'/s':''}</div>`).join('');
+    (r.results||[]).map(x=>`<div class="${x.live?'ok':''}">${x.live?'●':'○'} ${esc(x.channel)} — ${esc(x.protocol)||'—'} ${x.relayed?'already relayed by signalk-server':(x.rate_hz?esc(x.rate_hz)+'/s':'')}${x.error?' · '+esc(x.error):''}</div>`).join('');
   log(r);}
 async function capture(){log('capturing…');const r=await jpost('/api/capture',{});log(r);}
 async function apply_(){const s=document.getElementById('source').value;
@@ -340,8 +357,9 @@ class Handler(BaseHTTPRequestHandler):
             ssid, pw = body.get("ssid", ""), body.get("password", "")
             if not ssid:
                 return self._send(400, {"error": "ssid required"})
-            # Password via the environment, not argv, so it isn't visible
-            # to other users in `ps` for the length of the join.
+            # Password via the environment, not join_wifi.sh's argv. nmcli
+            # still receives it as an argument for the length of the join
+            # (backlog PI-4).
             rc, out, err = _run(["bash", JOIN_WIFI, ssid, "--password-env"],
                                 env_extra={"WIFI_PASSWORD": pw}, timeout=60)
             return self._send(200, {"ok": rc == 0, "output": (out + err).strip()})

@@ -16,7 +16,9 @@
 #   join_wifi.sh "Lynx MFD" --try creds.txt     # try each password in creds.txt until one works
 #   WIFI_PASSWORD=pw join_wifi.sh "Lynx MFD" --password-env
 #                                               # password from the environment, not argv
-#                                               #   (keeps it out of `ps`; the config UI uses this)
+#                                               #   (keeps it off this script's argv; nmcli still
+#                                               #   gets it as an argument during the join; the
+#                                               #   config UI uses this)
 #   join_wifi.sh --status                       # show the active WiFi connection
 #   join_wifi.sh "Lynx MFD" "pw" --ifname wlan1 # use a specific radio (e.g. a USB dongle,
 #                                               #   leaving wlan0 free to be your laptop's AP)
@@ -46,7 +48,7 @@ while [ $# -gt 0 ]; do
     --ifname) IFACE="${2:?--ifname needs a value}"; shift ;;
     --try)    TRY_FILE="${2:?--try needs a file}"; shift ;;
     --password-env) PASS="${WIFI_PASSWORD:-}"; PASS_FROM_ENV=1 ;;
-    -h|--help) sed -n '2,36p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
     -*) echo "unknown flag: $1" >&2; exit 2 ;;
     *)  if [ -z "$SSID" ]; then SSID="$1"; elif [ "$PASS_FROM_ENV" = 0 ] && [ -z "$PASS" ]; then PASS="$1"; fi ;;
   esac

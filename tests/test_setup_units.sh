@@ -6,7 +6,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 out="$(mktemp -d)"; trap 'rm -rf "$out"' EXIT
 
-fn="$(sed -n '/^install_unit() {/,/^}/p' "$here/scripts/setup_pi.sh")"
+fn="$(sed -n '/^sed_repl()/p; /^install_unit() {/,/^}/p' "$here/scripts/setup_pi.sh")"
 [ -n "$fn" ] || { echo "install_unit not found in setup_pi.sh"; exit 1; }
 sudo() { if [ "$1" = tee ]; then cat > "$out/$(basename "$2")"; else "$@"; fi; }
 eval "$fn"
@@ -28,5 +28,24 @@ check sailingrace-config.service "Environment=SIGNALK_NODE_SETTINGS=/home/alice/
 check sailingrace-config.service "Environment=LOG_DIR=/home/alice/sailingrace-logs"
 check ups-monitor.service "ExecStart=/home/pi/projects/SailinGrace-pi/.venv/bin/python /home/pi/projects/SailinGrace-pi/scripts/ups_monitor.py"
 if grep -n '^[^#].*/home/pi/SailinGrace\b' "$out"/*.service; then echo "FAIL: unrewritten /home/pi/SailinGrace path"; fail=1; fi
+
+# Awkward paths: '&' and '#' in the repo path, and /home/pi-data must not
+# be mistaken for /home/pi.
+# shellcheck disable=SC2034  # read by the eval'd install_unit
+REPO_ROOT='/home/bob/boat&sail #2/SailinGrace-pi' RUN_USER=bob RUN_HOME=/home/bob
+cat > "$out/src-odd.service" <<'UNIT'
+User=pi
+ExecStart=/home/pi/SailinGrace/scripts/pi/log_signalk.sh
+Environment=LOG_DIR=/home/pi/sailingrace-logs
+Environment=SPARE=/home/pi-data/x
+Environment=HOME_ONLY=/home/pi
+UNIT
+install_unit "$out/src-odd.service"
+check src-odd.service "User=bob"
+check src-odd.service "ExecStart=/home/bob/boat&sail #2/SailinGrace-pi/scripts/pi/log_signalk.sh"
+check src-odd.service "Environment=LOG_DIR=/home/bob/sailingrace-logs"
+check src-odd.service "Environment=SPARE=/home/pi-data/x"
+check src-odd.service "Environment=HOME_ONLY=/home/bob"
+
 [ "$fail" = 0 ] && echo "install_unit: all rewrites OK"
 exit "$fail"

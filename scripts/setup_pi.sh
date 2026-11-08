@@ -155,13 +155,19 @@ fi
 # repo/bundle actually lives, User=pi → $RUN_USER, and the remaining
 # /home/pi paths (logs, ~/.signalk) → $RUN_HOME. The repo path goes through
 # a placeholder so the home rewrite can't touch it.
+# Escape a value for the replacement side of a `s#…#…#` sed command
+# (backslash, '&' and the '#' delimiter), so a path like ~/boat&sail works.
+sed_repl() { printf '%s' "$1" | sed -e 's/[\\&#]/\\&/g'; }
 install_unit() {
-  local src="$1" dest
+  local src="$1" dest repo home user
   dest="/etc/systemd/system/$(basename "$1")"
+  repo="$(sed_repl "$REPO_ROOT")"; home="$(sed_repl "$RUN_HOME")"; user="$(sed_repl "$RUN_USER")"
+  # /home/pi only as a whole path component (/home/pi or /home/pi/…), never
+  # /home/pi-data or /home/pippa.
   sed -e "s#/home/pi/SailinGrace#@@SG_REPO@@#g" \
-      -e "s#/home/pi\b#${RUN_HOME}#g" \
-      -e "s#^User=pi\$#User=${RUN_USER}#" \
-      -e "s#@@SG_REPO@@#${REPO_ROOT}#g" \
+      -e "s#/home/pi\(/\|\$\|[[:space:]]\)#${home}\1#g" \
+      -e "s#^User=pi\$#User=${user}#" \
+      -e "s#@@SG_REPO@@#${repo}#g" \
       "$src" | sudo tee "$dest" >/dev/null
 }
 if [ -f "$REPO_ROOT/scripts/capture_signalk.py" ]; then

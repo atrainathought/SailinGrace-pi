@@ -84,8 +84,10 @@ SELF_NMEA_TCP_PORT = int(os.environ.get("SIGNALK_NMEA_TCP_PORT", "10110"))
 
 # Set by `capture` mode: probers then keep every raw line/frame they see (not
 # just the few samples the report shows), so the capture is usable for
-# parser work.
+# parser work. Capped per channel so a long capture on a busy bus can't run
+# a Pi out of memory; the summary records when the cap was hit.
 _KEEP_RAW = False
+MAX_RAW_LINES = 200_000
 
 
 def _real_home() -> Path:
@@ -131,6 +133,8 @@ class Probe:
     samples: list = field(default_factory=list)   # a few raw lines for the report
     error: str = ""
     raw: list = field(default_factory=list)       # every raw line (capture mode only)
+    raw_truncated: bool = False                   # raw hit MAX_RAW_LINES
+    relayed: bool = False                         # signalk-server already reads this source
 
     def score(self) -> float:
         """Rank live sources: protocol richness × rate. N2K and fused 0183
@@ -152,6 +156,8 @@ class Probe:
             return f"  {self.channel:28} {self.transport:8} ERROR: {self.error}"
         if not self.live:
             return f"  {self.channel:28} {self.transport:8} {'--':8} no data"
+        if self.relayed:
+            return f"  {self.channel:28} {self.transport:8} {self.protocol:8} already relayed by signalk-server"
         d = self.detail.get("sentences") or self.detail.get("pgns") or self.detail.get("paths") or {}
         top = ",".join(list(d.keys())[:6])
         return (f"  {self.channel:28} {self.transport:8} {self.protocol:8} "
@@ -230,9 +236,13 @@ def probe_can(duration: float, iface: str = CAN_IFACE) -> Probe:
         if len(pr.samples) < 8:
             pr.samples.append(f"PGN {pgn} (id={can_id:08X})")
         if _KEEP_RAW:
-            # candump-style: "<utc> can0 <id>#<data hex>"
-            dlc = min(frame[4], 8)
-            pr.raw.append(f"{now_iso()} {iface} {can_id:08X}#{frame[8:8 + dlc].hex().upper()}")
+            # Keep it cheap in the receive loop: (epoch float, id, data).
+            # capture_mode formats these as candump -l lines, which
+            # canplayer can replay.
+            if len(pr.raw) < MAX_RAW_LINES:
+                pr.raw.append((time.time(), iface, can_id, frame[8:8 + min(frame[4], 8)]))
+            else:
+                pr.raw_truncated = True
     s.close()
     pr.live = n > 0
     pr.rate_hz = n / max(duration, 0.1)
@@ -260,11 +270,10 @@ def probe_serial(duration: float, devices: list[str], bauds: tuple[int, ...]) ->
     for dev in devices:
         if os.path.realpath(dev) in claimed["serial"]:
             # signalk-server already has this port open; reading it here
-            # would steal bytes from the live relay.
-            pr = Probe(channel=f"{dev}@{claimed['serial'][os.path.realpath(dev)]}",
-                       transport="serial", protocol="NMEA0183")
-            pr.error = "in use by signalk-server (already relayed)"
-            out.append(pr)
+            # would steal bytes from the live relay. Report it as the live,
+            # relayed source it is, at the baud signalk-server uses.
+            out.append(_relayed_probe(
+                f"{dev}@{claimed['serial'][os.path.realpath(dev)]}", "serial"))
             continue
         for baud in bauds:
             pr = Probe(channel=f"{dev}@{baud}", transport="serial", protocol="NMEA0183")
@@ -286,7 +295,7 @@ def probe_serial(duration: float, devices: list[str], bauds: tuple[int, ...]) ->
             pr.detail = cls
             pr.samples = [l.decode(errors="replace").strip() for l in lines[:8]]
             if _KEEP_RAW:
-                pr.raw = [l.decode(errors="replace").rstrip("\r\n") for l in lines]
+                _keep_raw(pr, [l.decode(errors="replace").rstrip("\r\n") for l in lines])
             out.append(pr)
             if pr.live:        # found the right baud — don't try the others
                 break
@@ -302,8 +311,7 @@ def probe_udp(duration: float, ports: tuple[int, ...]) -> list[Probe]:
         if port in claimed["udp"]:
             # signalk-server is bound here; a second listener would fail to
             # bind or split the datagrams with the live relay.
-            pr.error = "in use by signalk-server (already relayed)"
-            out.append(pr)
+            out.append(_relayed_probe(f"udp:{port}", "udp"))
             continue
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -337,8 +345,38 @@ def probe_udp(duration: float, ports: tuple[int, ...]) -> list[Probe]:
         pr.detail = cls
         pr.samples = [l.decode(errors="replace").strip() for l in buf[port][:8]]
         if _KEEP_RAW:
-            pr.raw = [l.decode(errors="replace").rstrip("\r") for l in buf[port]]
+            _keep_raw(pr, [l.decode(errors="replace").rstrip("\r") for l in buf[port]])
     return out
+
+
+def _keep_raw(pr: Probe, lines: list) -> None:
+    pr.raw = lines[:MAX_RAW_LINES]
+    pr.raw_truncated = len(lines) > MAX_RAW_LINES
+
+
+def _relayed_probe(channel: str, transport: str) -> Probe:
+    """A source an enabled signalk-server connection already reads. It is
+    live (that's why it's configured) but not probed, so `--auto` keeps it
+    instead of switching away from a working relay."""
+    return Probe(channel=channel, transport=transport, protocol="NMEA0183", live=True,
+                 relayed=True, detail={"note": "already relayed by signalk-server"})
+
+
+_SELF_CACHE: dict[str, bool] = {}
+
+
+def _is_self(host: str) -> bool:
+    """True if `host` (name or IP) is this machine: loopback, or one of its
+    own addresses. Names are resolved, so `raspberrypi.local` and Debian's
+    127.0.1.1 hostname mapping count too."""
+    if host not in _SELF_CACHE:
+        try:
+            ip = socket.gethostbyname(host)
+        except OSError:
+            _SELF_CACHE[host] = False
+        else:
+            _SELF_CACHE[host] = ip.startswith("127.") or ip in local_ipv4_addrs()
+    return _SELF_CACHE[host]
 
 
 def local_ipv4_addrs() -> list[str]:
@@ -421,9 +459,8 @@ def probe_tcp_sweep(duration: float, hosts: list[str], ports: tuple[int, ...],
             targets.update(f"{pref}{i}" for i in range(1, 255))
     # Fast open-port scan across (host, port) pairs — minus our own
     # signalk-server's NMEA output, which would just echo the relay back.
-    own = {"127.0.0.1", "localhost", *local_ipv4_addrs()}
     pairs = [(h, p) for h in targets for p in ports
-             if not (h in own and p == SELF_NMEA_TCP_PORT)]
+             if not (p == SELF_NMEA_TCP_PORT and _is_self(h))]
     open_pairs: list[tuple[str, int]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=64) as ex:
         futs = {ex.submit(_port_open, h, p): (h, p) for h, p in pairs}
@@ -443,7 +480,7 @@ def probe_tcp(host: str, port: int, duration: float) -> Probe:
     pr.detail = cls
     pr.samples = [l.decode(errors="replace").strip() for l in lines[:8]]
     if _KEEP_RAW:
-        pr.raw = [l.decode(errors="replace").rstrip("\r") for l in lines]
+        _keep_raw(pr, [l.decode(errors="replace").rstrip("\r") for l in lines])
     if not pr.live and lines:
         pr.error = "open but not NMEA 0183"
     return pr
@@ -528,29 +565,37 @@ def scan_all(duration: float, *, sweep: bool, extra_hosts: list[str],
 def probe_source(source: str, duration: float) -> Probe:
     """Probe exactly the channel named by `source` (as `scan` prints it),
     instead of re-scanning everything. Lets `apply --source` reach a TCP
-    host that was only found by `--sweep`, and keeps apply fast."""
+    host that was only found by `--sweep`, and keeps apply fast. Uses the
+    same probers as `scan`, so both agree on what counts as live."""
     if source.startswith("tcp:"):
         try:
-            _, host, port = source.split(":")
-            return probe_tcp(host, int(port), duration)
+            _, host, port_s = source.split(":")
+            port = int(port_s)
         except ValueError:
             pass
+        else:
+            if port == SELF_NMEA_TCP_PORT and _is_self(host):
+                pr = Probe(channel=source, transport="tcp", protocol="NMEA0183")
+                pr.error = ("this is the Pi's own signalk-server NMEA output; "
+                            "relaying it would feed signalk-server back into itself")
+                return pr
+            return probe_tcp(host, port, duration)
     elif source.startswith("udp:"):
         try:
             port = int(source.split(":", 1)[1])
         except ValueError:
-            port = None
-        if port is not None:
-            if port in _signalk_claimed()["udp"]:
-                return Probe(channel=source, transport="udp", protocol="NMEA0183", live=True,
-                             detail={"note": "already in use by signalk-server"})
+            pass
+        else:
             return probe_udp(duration, (port,))[0]
     elif "@" in source:
         dev, _, baud = source.rpartition("@")
         if baud.isdigit():
-            if os.path.realpath(dev) in _signalk_claimed()["serial"]:
-                return Probe(channel=source, transport="serial", protocol="NMEA0183", live=True,
-                             detail={"note": "already in use by signalk-server"})
+            held = _signalk_claimed()["serial"].get(os.path.realpath(dev))
+            if held is not None and int(held) != int(baud):
+                pr = Probe(channel=source, transport="serial", protocol="NMEA0183")
+                pr.error = (f"signalk-server reads {dev} at {held} baud; "
+                            f"use {dev}@{held}")
+                return pr
             pr = probe_serial(duration, [dev], (int(baud),))[0]
             pr.channel = source
             return pr
@@ -722,16 +767,44 @@ def capture_mode(results: list[Probe], out_dir: Path) -> None:
                "live": r.live, "rate_hz": round(r.rate_hz, 2),
                "detail": r.detail, "samples": r.samples, "error": r.error}
         summary["channels"].append(rec)
-        lines = r.raw or r.samples
+        lines = [_raw_line(x) for x in r.raw] or r.samples
         if lines:
             safe = re.sub(r"[^a-zA-Z0-9]+", "_", r.channel).strip("_")
             rec["raw_file"] = f"{stamp}_{safe}.log"
             rec["raw_lines"] = len(lines)
-            (out_dir / rec["raw_file"]).write_text("\n".join(str(s) for s in lines) + "\n")
+            if r.raw_truncated:
+                rec["raw_truncated_at"] = MAX_RAW_LINES
+            (out_dir / rec["raw_file"]).write_text("\n".join(lines) + "\n")
     sfile = out_dir / f"{stamp}_summary.json"
     sfile.write_text(json.dumps(summary, indent=2))
+    _match_owner(out_dir, stamp)
     print(f"capture written to {out_dir}/ ({stamp}_*) — summary: {sfile}")
     print_report(results)
+
+
+def _raw_line(x) -> str:
+    """CAN frames are kept as (epoch, iface, id, data) tuples and written in
+    candump -l format, `(1699999999.123456) can0 09FD022A#0102…`, so
+    `canplayer -I` can replay them. NMEA lines are already strings."""
+    if isinstance(x, tuple):
+        t, iface, can_id, data = x
+        return f"({t:.6f}) {iface} {can_id:08X}#{data.hex().upper()}"
+    return str(x)
+
+
+def _match_owner(out_dir: Path, stamp: str) -> None:
+    """When run as root (sudo, or the config UI's root service) into a
+    user's folder, hand the files to that folder's owner so the user can
+    read, move and delete them."""
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return
+    try:
+        st = out_dir.parent.stat()
+        targets = [out_dir, *out_dir.glob(f"{stamp}_*")]
+        for t in targets:
+            os.chown(t, st.st_uid, st.st_gid)
+    except OSError:
+        pass
 
 
 # ── cli ───────────────────────────────────────────────────────────────
@@ -784,11 +857,20 @@ def main() -> int:
         print(json.dumps([{"channel": r.channel, "transport": r.transport,
                            "protocol": r.protocol, "live": r.live,
                            "rate_hz": round(r.rate_hz, 2), "detail": r.detail,
+                           "relayed": r.relayed, "error": r.error,
                            "score": round(r.score(), 1)} for r in results], indent=2))
     else:
         print_report(results)
 
     if args.mode == "apply" or args.auto:
+        relayed = [r for r in results if r.relayed]
+        if relayed:
+            # Don't switch away from a source signalk-server is already
+            # relaying: the probes couldn't measure it, so ranking it against
+            # the others would be meaningless and could kill a working feed.
+            print(f"signalk-server already relays {', '.join(r.channel for r in relayed)}; "
+                  "keeping it. Pass --source to switch deliberately.")
+            return 0
         live = [r for r in results if r.live and r.transport != "signalk"]
         if not live:
             print("no relayable live source to apply.", file=sys.stderr)

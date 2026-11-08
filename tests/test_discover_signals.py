@@ -93,15 +93,36 @@ def test_signalk_claimed_missing_file(tmp_path, monkeypatch):
     assert d._signalk_claimed() == {"serial": {}, "udp": set()}
 
 
-def test_probe_udp_skips_claimed_port(settings):
+def test_probe_udp_reports_claimed_port_as_relayed(settings):
     results = {p.channel: p for p in d.probe_udp(0.2, (2000,))}
-    assert results["udp:2000"].error == "in use by signalk-server (already relayed)"
-    assert not results["udp:2000"].live
+    pr = results["udp:2000"]
+    assert pr.live and pr.relayed and not pr.error      # not probed, but live
+    assert "already relayed" in pr.summary()
 
 
 def test_probe_source_claimed_udp_counts_as_live(settings):
     pr = d.probe_source("udp:2000", 0.1)
-    assert pr.live and pr.transport == "udp"
+    assert pr.live and pr.relayed and pr.transport == "udp"
+
+
+def test_probe_source_claimed_serial_wrong_baud(settings):
+    pr = d.probe_source("/dev/ttyUSB7@4800", 0.1)
+    assert not pr.live
+    assert "38400" in pr.error and "/dev/ttyUSB7@38400" in pr.error
+
+
+def test_scan_auto_keeps_relayed_source(settings, monkeypatch, capsys):
+    """--auto must not switch away from a source signalk-server already reads."""
+    relayed = d._relayed_probe("/dev/ttyUSB7@38400", "serial")
+    other = d.Probe("tcp:192.168.1.40:10110", "tcp", "NMEA0183", live=True, rate_hz=7,
+                    detail={"sentences": {"MWV": 70, "RMC": 10}})
+    monkeypatch.setattr(d, "scan_all", lambda *a, **k: [other, relayed])
+    applied = []
+    monkeypatch.setattr(d, "apply_source", lambda pr: applied.append(pr) or 0)
+    monkeypatch.setattr(d.sys, "argv", ["discover_signals.py", "scan", "--auto"])
+    assert d.main() == 0
+    assert applied == []
+    assert "keeping it" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("source,needle", [
@@ -135,13 +156,21 @@ def test_probe_source_tcp_reaches_unswept_host():
     assert pr.detail["sentences"] == {"MWV": 10}
 
 
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "127.0.1.1"])
+def test_probe_source_rejects_own_nmea_output(host):
+    pr = d.probe_source(f"tcp:{host}:{d.SELF_NMEA_TCP_PORT}", 0.1)
+    assert not pr.live and "own signalk-server NMEA output" in pr.error
+
+
 def test_tcp_sweep_never_probes_own_nmea_output(monkeypatch):
     probed = []
     monkeypatch.setattr(d, "_port_open", lambda h, p, timeout=0.3: probed.append((h, p)) or False)
     monkeypatch.setattr(d, "default_gateway", lambda: None)
     monkeypatch.setattr(d, "local_ipv4_addrs", lambda: ["10.55.0.1"])
-    d.probe_tcp_sweep(0.1, [], (10110, 10111), False, ["10.55.0.1", "192.168.1.40"])
+    d._SELF_CACHE.clear()
+    d.probe_tcp_sweep(0.1, [], (10110, 10111), False, ["10.55.0.1", "192.168.1.40", "localhost"])
     assert ("127.0.0.1", 10110) not in probed
+    assert ("localhost", 10110) not in probed      # names are resolved, not string-matched
     assert ("10.55.0.1", 10110) not in probed
     assert ("10.55.0.1", 10111) in probed          # other local ports still checked
     assert ("192.168.1.40", 10110) in probed       # remote 10110 still checked
@@ -193,6 +222,21 @@ def test_apply_source_needs_settings(tmp_path, monkeypatch):
 
 
 # ── capture ───────────────────────────────────────────────────────────
+def test_can_raw_line_is_candump_log_format():
+    line = d._raw_line((1699999999.1234567, "can0", 0x09FD022A, bytes([1, 2, 0xAB])))
+    assert line == "(1699999999.123457) can0 09FD022A#0102AB"
+
+
+def test_capture_caps_raw_and_records_it(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(d, "MAX_RAW_LINES", 5)
+    pr = d.Probe("udp:2000", "udp", live=True)
+    d._keep_raw(pr, [f"$IIMWV,{i}" for i in range(9)])
+    assert len(pr.raw) == 5 and pr.raw_truncated
+    d.capture_mode([pr], tmp_path)
+    rec = json.loads(next(tmp_path.glob("*_summary.json")).read_text())["channels"][0]
+    assert rec["raw_lines"] == 5 and rec["raw_truncated_at"] == 5
+
+
 def test_capture_writes_every_raw_line(tmp_path, capsys):
     pr = d.Probe("udp:2000", "udp", "NMEA0183", live=True, rate_hz=7,
                  detail={"sentences": {"MWV": 140}},
