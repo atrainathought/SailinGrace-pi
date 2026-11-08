@@ -22,7 +22,7 @@
 # Flags:
 #   --dir DIR   write the unpacked tree into DIR instead of a tarball
 #   --tar PATH  tarball output path (default: dist/sailingrace-pi.tar.gz)
-#   --sim       also include the fake-boat simulators (for a test Pi)
+#   --sim       also include the fake-boat simulators (NMEA 0183 + N2K) for a test Pi
 
 set -euo pipefail
 
@@ -60,7 +60,7 @@ FILES=(
   scripts/systemd/ups-monitor.service
 )
 if [ "$INCLUDE_SIM" = 1 ]; then
-  FILES+=( scripts/nmea0183_simulator.py scripts/signalk_simulator.py )
+  FILES+=( scripts/nmea0183_simulator.py scripts/n2k_sim.py )
 fi
 
 for f in "${FILES[@]}"; do

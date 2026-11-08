@@ -257,6 +257,11 @@ Independent of the SailinGrace app — the Pi logs whether the laptop is connect
 
 ## Simulation Pi — fake boat for testing (no instruments)
 
+> **NMEA 2000 instead of 0183?** `scripts/n2k_sim.py` sends scripted N2K
+> sensor data out of a Pi's own CAN HAT (`can0`) to the boat Pi over a real
+> CAN link. See [usb_bench_test.md](usb_bench_test.md). This section covers
+> the NMEA 0183 / network path.
+
 A second, much simpler Pi (or any spare machine) that pretends to be the
 boat's instruments, so you can exercise the whole laptop ingest path —
 coalescer → UKF → estimators → `instrument_samples` → dashboard — with

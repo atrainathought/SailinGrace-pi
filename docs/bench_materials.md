@@ -77,7 +77,9 @@ The laptop's job is to read the copper bus **independently of the Pi**, so
 a disagreement between them points at the Pi.
 
 > **Already have a spare Pi 4B + Waveshare RS485 CAN HAT?** It does this
-> job with **no purchase** (or alongside a laptop adapter). Set it up with
+> job with **no purchase** (or alongside a laptop adapter), and can also
+> **send** the test data with `scripts/n2k_sim.py`, so the ESP32 becomes
+> optional ([usb_bench_test.md](usb_bench_test.md) phase 1). Set it up with
 > `CAN_HAT=waveshare bash scripts/setup_pi.sh`: the HAT's crystal is
 > 12 MHz on current boards (marked 12.000), 8 MHz on old ones. Wiring and
 > termination are in

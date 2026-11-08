@@ -152,15 +152,18 @@ Linux laptop). Windows: skip — run this one on the Pi.
 ```bash
 sudo modprobe vcan
 sudo ip link add vcan0 type vcan && sudo ip link set vcan0 up
-# Fake an apparent-wind frame (PGN 130306, src 0x42): 10 kn @ 30°
+# The full scripted profile (same bytes as the ESP32 firmware):
+python3 scripts/n2k_sim.py --iface vcan0 &
+candump -L vcan0 | analyzerjs                      # (npm i -g @canboat/canboatjs)
+# …or a single apparent-wind frame (PGN 130306, src 0x42): 10 kn @ 30°
 cansend vcan0 09FD0242#0102027414FAFFFF
-candump vcan0 | candump2analyzer | analyzer        # decodes as Wind Data
 ```
 
 Optionally add a temporary signalk-server connection on `vcan0` (NMEA 2000
-/ canboat-js) and confirm the wind path appears. Remove it afterwards.
+/ canboat-js), check the P5 table in [usb_bench_test.md](usb_bench_test.md)
+against it, then remove the connection.
 
-**Pass:** analyzer decodes PGN 130306 with wind speed ≈ 5.14 m/s, angle ≈ 30°.
+**Pass:** all seven PGNs decode; wind speed ≈ 5.14 m/s, angle ≈ 0.524 rad (30°).
 
 ### Level 1 — Physical bus
 
