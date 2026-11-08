@@ -222,7 +222,7 @@ or `sudo python3 scripts/discover_signals.py apply --source can0`).
    ```
    Admin UI → Dashboard: Deltas/sec in the tens (≈ 4×10 Hz + 2×1 Hz of source messages) and steady.
 3. **Logger** (Pi): the SignalK delta log under the logger's data dir is growing.
-4. **SailinGrace** (laptop) subscribed to `ws://<pi>.local:3000/signalk/v1/stream?subscribe=self`:
+4. **SailinGrace** (laptop), with Settings → System set to combination C / SignalK, and the Pi picked from the discovered servers in Settings → Network (or `ws://<pi>.local:3000/signalk/v1/stream?subscribe=self` typed in). The pre-race check should be green for instruments:
    `curl http://localhost:8000/api/sensors/capabilities` → `available: true,
    source: "signalk"`; wind / heading / position features lit on the dashboard.
 

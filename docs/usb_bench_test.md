@@ -255,19 +255,35 @@ Also check:
 
 ### U7 — SailinGrace on the dev computer
 
-Start SailinGrace and point it at the Pi over the cable: Settings →
-Network → `ws://10.55.0.1:3000/signalk/v1/stream?subscribe=self`
-(or `SIGNALK_URL=` that URL when launching).
+Use a current SailinGrace `master`: the boat setup now lives in Settings →
+System, and the app finds signalk-server by mDNS
+([system_architecture.md § Where the setup lives](https://github.com/atrainathought/SailinGrace/blob/master/docs/system_architecture.md#where-the-setup-lives)).
+Launch with `INGEST_SOURCE=synthetic` so the sim's samples can't be
+mistaken for real instrument data in the database.
+
+1. **Settings → System.** Set combination **C** (Pi relays, the laptop
+   runs SailinGrace), instruments **SignalK**, SailinGrace on the
+   **laptop**. This matches Lynx's `config/boats/lynx.yaml`, so it's
+   usually already the default.
+2. **Settings → Network.** The Pi's signalk-server should be offered as a
+   one-tap choice (it advertises `_signalk-ws._tcp`), and Settings → System
+   should list it under what's on the network. mDNS over the USB-C link
+   depends on the dev computer's OS and firewall. If nothing is offered
+   within about 15 s, enter
+   `ws://10.55.0.1:3000/signalk/v1/stream?subscribe=self` by hand. Record
+   which one happened.
+3. **Pre-race check** (Settings → System). The feed-type check should
+   pass: the SignalK feed matches the instruments setting.
 
 ```bash
 curl http://localhost:8000/api/sensors/capabilities
 #   expect available: true, source: "signalk"
+curl http://localhost:8000/api/system/setup
+#   expect combination C, instruments signalk; the Pi listed under discovered services if mDNS worked
 ```
 
-To keep these synthetic samples separate from real instrument data in the
-database, launch with `INGEST_SOURCE=synthetic`.
-
 **Pass:**
+- The pre-race check is green for instruments
 - Wind, heading and position light up
 - The dashboard shows 10 → 20 kn and starboard → port in the right units
 - Heading crosses north with no 180° spike in the UKF output
@@ -278,6 +294,7 @@ database, launch with `INGEST_SOURCE=synthetic`.
 | Test | Do | Pass |
 |---|---|---|
 | Unplug the CAN link | Pull it for 30 s, then reconnect | ESP32 WARNs while it's out. The Pi stays up, and data resumes in SignalK within about 5 s. SailinGrace's instrument freshness goes stale, then recovers. |
+| Quiet feed | Pull the CAN link for more than 60 s | The instrument freshness indicator goes red, then recovers when the link is reconnected. No **Switch** banner appears and the pre-race check stays quiet: both act only when a *second* SignalK server is visible. The drop isn't logged anywhere yet (backlog SYS-5). |
 | Reset the ESP32 | Press its reset button | A new address claim on the Pi (`candump` shows PGN 60928 from the sim), and data resumes |
 | Reboot the Pi | `sudo reboot` | ESP32 WARNs until `can0` is back. signalk-server reconnects to can0 by itself after boot. |
 | Force bus-off | Short CANH–CANL for about 2 s with a jumper | `ip -statistics` shows a `bus-off` count of 1 or more, **and** the link is back to ERROR-ACTIVE without you doing anything (restart-ms 100) |
