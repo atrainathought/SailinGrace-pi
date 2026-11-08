@@ -156,7 +156,8 @@ fi
 # /home/pi paths (logs, ~/.signalk) → $RUN_HOME. The repo path goes through
 # a placeholder so the home rewrite can't touch it.
 install_unit() {
-  local src="$1" dest="/etc/systemd/system/$(basename "$1")"
+  local src="$1" dest
+  dest="/etc/systemd/system/$(basename "$1")"
   sed -e "s#/home/pi/SailinGrace#@@SG_REPO@@#g" \
       -e "s#/home/pi\b#${RUN_HOME}#g" \
       -e "s#^User=pi\$#User=${RUN_USER}#" \
