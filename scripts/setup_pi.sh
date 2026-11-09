@@ -320,6 +320,12 @@ EOF
     fi
   fi
 
+  # Trixie's NetworkManager ships 85-nm-unmanaged.rules, which marks every
+  # USB gadget interface (DEVTYPE=gadget) unmanaged — sg-usb below would
+  # never activate and the cable link stays dead. Override it for usb0.
+  echo 'SUBSYSTEM=="net", ACTION=="add|change|move", ENV{INTERFACE}=="usb0", ENV{NM_UNMANAGED}="0"' \
+    | sudo tee /etc/udev/rules.d/86-sailingrace-usb0.rules >/dev/null
+
   # Give usb0 a fixed address + DHCP via NetworkManager "shared" so the
   # laptop is leased an address automatically and you browse to a known IP.
   # usb0 only appears after the gadget reboot; the profile auto-activates then.
