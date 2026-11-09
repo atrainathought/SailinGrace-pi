@@ -18,11 +18,18 @@
 # free-space floor below which it stops writing rather than fill the
 # card). Tune the values below to your SD card.
 
+# The /home/pi/SailinGrace paths (and User=pi / /home/pi below) are
+# defaults: setup_pi.sh rewrites them to the actual repo location, login
+# user and home when it installs this unit. Edit them by hand if you copy
+# the unit manually.
+
 [Unit]
 Description=SailinGrace raw SignalK delta logger
 Documentation=https://github.com/atrainathought/SailinGrace
-After=signalk-server.service
-Wants=signalk-server.service
+After=signalk.service signalk-server.service
+# signalk-server-setup installs signalk.service; signalk-server.service covers
+# hand-made units. Wants= on a unit that does not exist is harmless.
+Wants=signalk.service signalk-server.service
 
 [Service]
 Type=simple

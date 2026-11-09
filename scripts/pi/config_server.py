@@ -17,8 +17,10 @@ No routing/weather code, no extra dependencies (Python stdlib only).
 Run by `sailingrace-config.service` as root so it can drive nmcli,
 systemctl, and can0.
 
-Access: the USB-C cable (10.55.0.0/24) and the Pi itself are trusted — a
-physical cable is the credential. From any other network (boat WiFi, the
+Access: the USB-C cable and the Pi itself are trusted — a physical cable is
+the credential. "On the cable" means the request was addressed to the Pi's
+gadget address (10.55.0.1, only on usb0) from 10.55.0.0/24; a peer merely
+claiming a 10.55.0.x source address on WiFi doesn't qualify. From any other network (boat WiFi, the
 Pi's AP, ethernet) the API needs the setup token, which setup_pi.sh writes
 to /etc/sailingrace/config-token and prints at the end; the page asks for
 it once. CONFIG_TOKEN overrides the file. If neither exists, only the
@@ -36,6 +38,7 @@ import json
 import os
 import socket
 import subprocess
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -47,10 +50,36 @@ DISCOVER = str(REPO_ROOT / "scripts" / "discover_signals.py")
 JOIN_WIFI = str(REPO_ROOT / "scripts" / "pi" / "join_wifi.sh")
 PORT = int(os.environ.get("CONFIG_PORT", "8080"))
 TOKEN_FILE = Path(os.environ.get("CONFIG_TOKEN_FILE", "/etc/sailingrace/config-token"))
-# Networks that need no token: loopback and the USB-C gadget link.
-TRUSTED_NETS = [ipaddress.ip_network(n) for n in
-                os.environ.get("CONFIG_TRUSTED_NETS", "127.0.0.0/8,::1/128,10.55.0.0/24").split(",")
-                if n.strip()]
+# No token needed for (a) loopback peers, or (b) requests that arrive on the
+# USB-C gadget link — identified by the Pi-side address they were sent TO
+# (10.55.0.1, only configured on usb0), not by the peer's source address,
+# which anyone on the boat WiFi could simply set to 10.55.0.x.
+TRUSTED_LOCAL_ADDRS = {a.strip() for a in
+                       os.environ.get("CONFIG_TRUSTED_LOCAL_ADDRS", "10.55.0.1").split(",")
+                       if a.strip()}
+USB_NET = ipaddress.ip_network(os.environ.get("CONFIG_USB_NET", "10.55.0.0/24"))
+MAX_BODY = 64 * 1024
+
+
+
+def _login_home() -> Path:
+    """Home of the login user, even when started with sudo (root's $HOME is
+    /root). The systemd unit sets LOG_DIR / SIGNALK_NODE_SETTINGS
+    explicitly; this is the default for a manual `sudo python3 …` run."""
+    user = os.environ.get("SUDO_USER")
+    if user and user != "root":
+        try:
+            import pwd
+            return Path(pwd.getpwnam(user).pw_dir)
+        except (KeyError, ImportError):
+            pass
+    return Path.home()
+
+
+LOG_DIR = os.environ.get("LOG_DIR", str(_login_home() / "sailingrace-logs"))
+# One scan / capture / apply / join at a time: they bind the same ports and
+# reconfigure the same services.
+JOB_LOCK = threading.Lock()
 
 
 def _load_token() -> str:
@@ -67,7 +96,7 @@ TOKEN = _load_token()
 # Where signalk-server keeps its settings — so `apply` writes the right file
 # even though this server runs as root (whose $HOME is /root).
 SIGNALK_SETTINGS = os.environ.get(
-    "SIGNALK_NODE_SETTINGS", "/home/pi/.signalk/settings.json")
+    "SIGNALK_NODE_SETTINGS", str(_login_home() / ".signalk" / "settings.json"))
 
 PAGE = """<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
@@ -147,9 +176,9 @@ async function discover(){log('scanning channels (can take ~20s)…');
   const r=await jget('/api/discover?sweep='+(sweep.checked?1:0));
   const sel=document.getElementById('source');sel.innerHTML='';
   (r.results||[]).filter(x=>x.live&&x.transport!=='signalk').forEach(x=>{
-    const o=document.createElement('option');o.value=x.channel;o.textContent=`${x.channel} (${x.protocol}, ${x.rate_hz}/s)`;sel.appendChild(o);});
+    const o=document.createElement('option');o.value=x.channel;o.textContent=x.relayed?`${x.channel} (already relayed)`:`${x.channel} (${x.protocol}, ${x.rate_hz}/s)`;sel.appendChild(o);});
   document.getElementById('sources').innerHTML =
-    (r.results||[]).map(x=>`<div class="${x.live?'ok':''}">${x.live?'●':'○'} ${esc(x.channel)} — ${esc(x.protocol)||'—'} ${x.rate_hz?esc(x.rate_hz)+'/s':''}</div>`).join('');
+    (r.results||[]).map(x=>`<div class="${x.live?'ok':''}">${x.live?'●':'○'} ${esc(x.channel)} — ${esc(x.protocol)||'—'} ${x.relayed?'already relayed by signalk-server':(x.rate_hz?esc(x.rate_hz)+'/s':'')}${x.error?' · '+esc(x.error):''}</div>`).join('');
   log(r);}
 async function capture(){log('capturing…');const r=await jpost('/api/capture',{});log(r);}
 async function apply_(){const s=document.getElementById('source').value;
@@ -213,13 +242,19 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _trusted_peer(self) -> bool:
+        def _ip(a):
+            ip = ipaddress.ip_address(a)
+            return ip.ipv4_mapped or ip if ip.version == 6 else ip
         try:
-            ip = ipaddress.ip_address(self.client_address[0])
-        except ValueError:
+            peer = _ip(self.client_address[0])
+            local = _ip(self.connection.getsockname()[0])
+        except (ValueError, OSError):
             return False
-        if getattr(ip, "ipv4_mapped", None):
-            ip = ip.ipv4_mapped
-        return any(ip in n for n in TRUSTED_NETS)
+        if peer.is_loopback:
+            return True
+        # Must both arrive on the gadget's own address AND come from its
+        # subnet: a spoofed 10.55.0.x peer on WiFi hits the WiFi address.
+        return str(local) in TRUSTED_LOCAL_ADDRS and peer in USB_NET
 
     def _host_ok(self) -> bool:
         """Refuse DNS-rebinding: only IP literals, localhost, *.local or
@@ -279,7 +314,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/discover":
             sweep = qs.get("sweep", ["0"])[0] == "1"
             cmd = [PY, DISCOVER, "scan", "--json", "--duration", "8"] + (["--sweep"] if sweep else [])
-            rc, out, err = _run(cmd, timeout=120)
+            if not JOB_LOCK.acquire(blocking=False):
+                return self._send(409, {"error": "another scan/apply/join is running — try again shortly"})
+            try:
+                rc, out, err = _run(cmd, env_extra={"SIGNALK_NODE_SETTINGS": SIGNALK_SETTINGS},
+                                    timeout=120)
+            finally:
+                JOB_LOCK.release()
             try:
                 return self._send(200, {"results": json.loads(out)})
             except json.JSONDecodeError:
@@ -290,16 +331,37 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if code := self._auth():
             return self._send(code, {"error": "setup token required" if code == 401 else "bad host"})
-        length = int(self.headers.get("Content-Length", 0))
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            return self._send(400, {"error": "bad Content-Length"})
+        if not 0 <= length <= MAX_BODY:
+            return self._send(413, {"error": "request too large"})
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             body = {}
+        if not isinstance(body, dict):
+            body = {}
+        if path not in ("/api/wifi/join", "/api/apply", "/api/capture"):
+            return self._send(404, {"error": "not found"})
+        if not JOB_LOCK.acquire(blocking=False):
+            return self._send(409, {"error": "another scan/apply/join is running — try again shortly"})
+        try:
+            return self._post_job(path, body)
+        finally:
+            JOB_LOCK.release()
+
+    def _post_job(self, path, body):
         if path == "/api/wifi/join":
             ssid, pw = body.get("ssid", ""), body.get("password", "")
             if not ssid:
                 return self._send(400, {"error": "ssid required"})
-            rc, out, err = _run(["bash", JOIN_WIFI, ssid, pw], timeout=60)
+            # Password via the environment, not join_wifi.sh's argv. nmcli
+            # still receives it as an argument for the length of the join
+            # (backlog PI-4).
+            rc, out, err = _run(["bash", JOIN_WIFI, ssid, "--password-env"],
+                                env_extra={"WIFI_PASSWORD": pw}, timeout=60)
             return self._send(200, {"ok": rc == 0, "output": (out + err).strip()})
         if path == "/api/apply":
             src = body.get("source", "")
@@ -310,7 +372,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": rc == 0, "output": (out + err).strip()})
         if path == "/api/capture":
             rc, out, err = _run([PY, DISCOVER, "capture", "--duration", "20",
-                                 "--out-dir", "/home/pi/sailingrace-logs/discovery"], timeout=120)
+                                 "--out-dir", os.path.join(LOG_DIR, "discovery")], timeout=120)
             return self._send(200, {"ok": rc == 0, "output": (out + err).strip()})
         return self._send(404, {"error": "not found"})
 

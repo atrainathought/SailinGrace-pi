@@ -21,3 +21,7 @@ software bring-up playbook, and [docs/bench_test.md](docs/bench_test.md)
 (parts: [docs/bench_materials.md](docs/bench_materials.md)) for testing it
 against a real NMEA 2000 backbone before it goes on the boat ([docs/usb_bench_test.md](docs/usb_bench_test.md)
 is the ESP32 + Pi over USB variant, with no laptop N2K adapter).
+
+Tests (no Pi needed — the same checks CI runs on every push):
+    pip install pytest websockets smbus2 pyserial
+    python -m pytest -q && bash tests/test_setup_units.sh

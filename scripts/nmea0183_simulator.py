@@ -8,7 +8,8 @@ exercised end-to-end without any boat hardware:
                                       → coalescer → UKF / estimators
                                       → instrument_samples → /api/wind/current
 
-It models the same deterministic boat as ``signalk_simulator.py`` —
+It models the same deterministic boat as ``signalk_simulator.py`` (in the
+main SailinGrace repo) —
 Newport → Bermuda at 6.5 kt, bearing ~158°T, with sinusoidal wind — so
 the two sources are interchangeable for testing. The difference is the
 wire format: this speaks NMEA 0183 (the instrument-bus path), the other
@@ -39,6 +40,10 @@ On the Pi (or any machine), pick a transport:
     # Raw serial bus (RS-422/USB adapter, e.g. a null-modem pair).
     python scripts/nmea0183_simulator.py --transport serial \
         --serial-device /dev/ttyUSB0 --baud 4800
+
+Port note: on a Pi that also runs signalk-server, 10110 is already taken
+by signalk-server's own NMEA 0183 TCP output — use e.g. ``--port 10111``
+there (discover_signals.py also ignores the Pi's own 10110 on purpose).
 
 Then point the backend at it (laptop side). Tag the run synthetic so the
 fake samples stay distinguishable from real instrument data in the DB:
