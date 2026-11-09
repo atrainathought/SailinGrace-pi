@@ -17,7 +17,10 @@ Remove:
     sudo bash scripts/uninstall.sh --confirm
 
 See [docs/install_rpi.md](docs/install_rpi.md) for the full hardware and
-software bring-up playbook.
+software bring-up playbook, and [docs/bench_test.md](docs/bench_test.md)
+(parts: [docs/bench_materials.md](docs/bench_materials.md)) for testing it
+against a real NMEA 2000 backbone before it goes on the boat ([docs/usb_bench_test.md](docs/usb_bench_test.md)
+is the ESP32 + Pi over USB variant, with no laptop N2K adapter).
 
 Tests (no Pi needed — the same checks CI runs on every push):
     pip install pytest websockets smbus2 pyserial

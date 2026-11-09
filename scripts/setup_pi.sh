@@ -7,7 +7,8 @@
 #
 # What this does (idempotent — safe to re-run):
 #   1. Enables SPI + I2C
-#   2. Adds PiCAN-M MCP2515 device-tree overlay to /boot/firmware/config.txt
+#   2. Adds the MCP2515 CAN HAT overlay to /boot/firmware/config.txt
+#      (PiCAN-M by default; CAN_HAT=waveshare for the Waveshare RS485 CAN HAT)
 #   3. Brings up can0 at 250 kbps via systemd-networkd
 #   4. Installs can-utils, i2c-tools, smbus2, Node.js LTS, signalk-server
 #   5. Installs the Waveshare UPS HAT (D) monitor systemd unit (only when
@@ -60,17 +61,48 @@ log "enabling SPI + I2C via raspi-config"
 sudo raspi-config nonint do_spi 0
 sudo raspi-config nonint do_i2c 0
 
-# ── 2. PiCAN-M MCP2515 device-tree overlay ───────────────────────────
+# ── 2. CAN HAT (MCP2515) device-tree overlay ─────────────────────────
 
-# 16 MHz oscillator is the PiCAN-M default. If you have a clone board
-# with an 8 MHz crystal, change oscillator=8000000 here and re-run.
-append_if_missing /boot/firmware/config.txt "# PiCAN-M (NMEA 2000 HAT)" <<'EOF'
+# Which MCP2515 CAN HAT is fitted. The oscillator MUST match the crystal on
+# the board: a wrong value gives a can0 that comes up clean but hears nothing.
+#   CAN_HAT=pican-m    (default) Copperhill PiCAN-M — 16 MHz, the boat unit
+#   CAN_HAT=waveshare  Waveshare RS485 CAN HAT — 12 MHz on current boards
+#                      (crystal marked 12.000); older ones are 8 MHz
+#   CAN_OSCILLATOR=8000000   override the crystal for either (clones, old boards)
+# e.g.  CAN_HAT=waveshare bash scripts/setup_pi.sh
+# On a re-run the existing overlay line is only rewritten when CAN_HAT or
+# CAN_OSCILLATOR is set explicitly, so a plain re-run never changes it.
+CAN_HAT_EXPLICIT=0
+if [ -n "${CAN_HAT:-}" ] || [ -n "${CAN_OSCILLATOR:-}" ]; then CAN_HAT_EXPLICIT=1; fi
+CAN_HAT="${CAN_HAT:-pican-m}"
+case "$CAN_HAT" in
+  pican-m)   CAN_HAT_NAME="PiCAN-M (NMEA 2000 HAT)"; CAN_OSC_DEFAULT=16000000; CAN_OVERLAY_EXTRA="" ;;
+  waveshare) CAN_HAT_NAME="Waveshare RS485 CAN HAT"; CAN_OSC_DEFAULT=12000000; CAN_OVERLAY_EXTRA=",spimaxfrequency=2000000" ;;
+  *) warn "unknown CAN_HAT='$CAN_HAT' (expected pican-m or waveshare)"; exit 1 ;;
+esac
+CAN_OSCILLATOR="${CAN_OSCILLATOR:-$CAN_OSC_DEFAULT}"
+CAN_OVERLAY="dtoverlay=mcp2515-can0,oscillator=${CAN_OSCILLATOR},interrupt=25${CAN_OVERLAY_EXTRA}"
+CONFIG_TXT=/boot/firmware/config.txt
 
-# PiCAN-M (NMEA 2000 HAT) - 16 MHz oscillator, IRQ on GPIO 25
+if [ -f "$CONFIG_TXT" ] && grep -q '^dtoverlay=mcp2515-can0' "$CONFIG_TXT"; then
+  current=$(grep -m1 '^dtoverlay=mcp2515-can0' "$CONFIG_TXT")
+  if [ "$current" = "$CAN_OVERLAY" ]; then
+    log "CAN overlay already set: $current"
+  elif [ "$CAN_HAT_EXPLICIT" = 1 ]; then
+    log "CAN overlay: $current -> $CAN_OVERLAY ($CAN_HAT_NAME; reboot to apply)"
+    sudo sed -i "s|^dtoverlay=mcp2515-can0.*|$CAN_OVERLAY|" "$CONFIG_TXT"
+  else
+    log "keeping existing CAN overlay: $current (set CAN_HAT / CAN_OSCILLATOR to change it)"
+  fi
+else
+  append_if_missing "$CONFIG_TXT" "# SailinGrace CAN HAT" <<EOF
+
+# SailinGrace CAN HAT: $CAN_HAT_NAME - ${CAN_OSCILLATOR} Hz oscillator, IRQ on GPIO 25
 dtparam=spi=on
 dtparam=i2c_arm=on
-dtoverlay=mcp2515-can0,oscillator=16000000,interrupt=25
+$CAN_OVERLAY
 EOF
+fi
 
 # ── 3. can0 persistence via systemd-networkd ─────────────────────────
 
@@ -82,7 +114,15 @@ Name=can0
 
 [CAN]
 BitRate=250000
+# Auto-recover from bus-off (a short, a hot-unplug, a babbling node).
+# Without this the kernel leaves can0 in BUS-OFF until a manual down/up.
+RestartSec=100ms
 EOF
+elif ! grep -q '^RestartSec=' /etc/systemd/network/80-can.network; then
+  # Older installs wrote the file without bus-off recovery — add it.
+  log "adding RestartSec=100ms (bus-off recovery) to 80-can.network"
+  sudo sed -i '/^\[CAN\]/a RestartSec=100ms' /etc/systemd/network/80-can.network
+  sudo networkctl reload 2>/dev/null && sudo networkctl reconfigure can0 2>/dev/null || true
 else
   log "/etc/systemd/network/80-can.network already exists — skipping"
 fi
@@ -279,6 +319,12 @@ EOF
       sudo sed -i '1 s/$/ modules-load=dwc2,g_ether/' "$CMDLINE"
     fi
   fi
+
+  # Trixie's NetworkManager ships 85-nm-unmanaged.rules, which marks every
+  # USB gadget interface (DEVTYPE=gadget) unmanaged — sg-usb below would
+  # never activate and the cable link stays dead. Override it for usb0.
+  echo 'SUBSYSTEM=="net", ACTION=="add|change|move", ENV{INTERFACE}=="usb0", ENV{NM_UNMANAGED}="0"' \
+    | sudo tee /etc/udev/rules.d/86-sailingrace-usb0.rules >/dev/null
 
   # Give usb0 a fixed address + DHCP via NetworkManager "shared" so the
   # laptop is leased an address automatically and you browse to a known IP.
