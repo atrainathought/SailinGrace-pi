@@ -157,7 +157,8 @@ vcgencmd get_throttled                  # throttled=0x0 (no under-voltage)
 ip -details -statistics link show can0  # UP, bitrate 250000, restart-ms 100
 ```
 
-On the boat Pi also: `systemctl is-active signalk-server sailingrace-logger`.
+On the boat Pi also: `systemctl is-active signalk.service sailingrace-logger`
+(`signalk-server-setup` installs the unit as `signalk.service`).
 In a browser, check `http://10.55.0.1:3000` (signalk-server admin) and
 `http://10.55.0.1:8080` (config page).
 
@@ -315,7 +316,7 @@ curl http://localhost:8000/api/system/setup           # combination C, instrumen
 | Reboot the boat Pi | `sudo reboot` | The simulator WARNs until the boat Pi's `can0` is back; then signalk-server reconnects by itself |
 | Force bus-off | Short H–L for about 2 s with a jumper | `ip -statistics` on both Pis shows `bus-off` 1 or more, **and** both links return to ERROR-ACTIVE without you doing anything (restart-ms 100) |
 | Power sag | Run for 30 min, then re-check `vcgencmd get_throttled` on the boat Pi | Still `0x0` |
-| Soak | Overnight | Rates unchanged. The logger respects `MAX_LOG_MB`. No growth in signalk-server memory (`systemctl status signalk-server`). |
+| Soak | Overnight | Rates unchanged. The logger respects `MAX_LOG_MB`. No growth in signalk-server memory (`systemctl status signalk.service`). |
 
 ### P8 — Golden recording
 

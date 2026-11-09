@@ -202,8 +202,8 @@ candump can0
 curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo bash -
 sudo apt install -y nodejs
 sudo npm install -g signalk-server
-signalk-server-setup
-sudo systemctl enable --now signalk-server
+signalk-server-setup          # installs and starts signalk.service when you answer yes
+sudo systemctl enable --now signalk.service
 
 # 5. UPS monitor (always on the Pi — A1 and A2).
 sudo apt install -y python3-venv git
