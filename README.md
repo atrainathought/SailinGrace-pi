@@ -18,3 +18,7 @@ Remove:
 
 See [docs/install_rpi.md](docs/install_rpi.md) for the full hardware and
 software bring-up playbook.
+
+Tests (no Pi needed — the same checks CI runs on every push):
+    pip install pytest websockets smbus2 pyserial
+    python -m pytest -q && bash tests/test_setup_units.sh

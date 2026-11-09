@@ -18,6 +18,11 @@
 # /etc/sailingrace/config-token (the page prompts for it). Set CONFIG_TOKEN
 # to override the file.
 
+# The /home/pi/SailinGrace paths (and User=pi / /home/pi below) are
+# defaults: setup_pi.sh rewrites them to the actual repo location, login
+# user and home when it installs this unit. Edit them by hand if you copy
+# the unit manually.
+
 [Unit]
 Description=SailinGrace Pi config UI (setup / discovery)
 Documentation=https://github.com/atrainathought/SailinGrace-pi
@@ -29,6 +34,7 @@ Type=simple
 User=root
 Environment=CONFIG_PORT=8080
 Environment=SIGNALK_NODE_SETTINGS=/home/pi/.signalk/settings.json
+Environment=LOG_DIR=/home/pi/sailingrace-logs
 ExecStart=/home/pi/SailinGrace/.venv/bin/python /home/pi/SailinGrace/scripts/pi/config_server.py
 Restart=on-failure
 RestartSec=5

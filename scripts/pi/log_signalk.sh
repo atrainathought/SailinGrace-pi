@@ -24,23 +24,23 @@
 # day with only a ~1-2 s reconnect gap at each guard interval.
 #
 # Env vars (override on the systemd unit if needed):
-#   LOG_DIR          target directory (default: /home/pi/sailingrace-logs)
+#   LOG_DIR          target directory (default: $HOME/sailingrace-logs)
 #   SIGNALK_URL      default: ws://localhost:3000/signalk/v1/stream?subscribe=all
 #   KEEP_DAYS        age cap in days (default: 14)
 #   MAX_LOG_MB       total budget for signalk_*.log (default: 4000)
 #   MIN_FREE_MB      filesystem free-space floor (default: 1000)
 #   GUARD_INTERVAL_S prune/disk-check + capture-chunk seconds (default: 900)
-#   SG_REPO          repo root (default: /home/pi/SailinGrace)
+#   SG_REPO          repo root (default: the repo this script lives in)
 
 set -euo pipefail
 
-LOG_DIR=${LOG_DIR:-/home/pi/sailingrace-logs}
+LOG_DIR=${LOG_DIR:-$HOME/sailingrace-logs}
 SIGNALK_URL=${SIGNALK_URL:-ws://localhost:3000/signalk/v1/stream?subscribe=all}
 KEEP_DAYS=${KEEP_DAYS:-14}
 MAX_LOG_MB=${MAX_LOG_MB:-4000}
 MIN_FREE_MB=${MIN_FREE_MB:-1000}
 GUARD_INTERVAL_S=${GUARD_INTERVAL_S:-900}
-SG_REPO=${SG_REPO:-/home/pi/SailinGrace}
+SG_REPO=${SG_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 
 mkdir -p "$LOG_DIR"
 

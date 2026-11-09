@@ -1,0 +1,35 @@
+# Checks that need no Pi hardware: syntax, shellcheck, unit tests, the
+# setup_pi.sh unit-file rewrite, and the bundle build. Python 3.11 is
+# Bookworm's system Python, 3.13 is Trixie's.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install test deps (same as the Pi venv + pytest)
+        run: pip install pytest websockets smbus2 pyserial
+      - name: Python syntax
+        run: python -m py_compile scripts/*.py scripts/pi/*.py
+      - name: Shell syntax
+        run: for f in scripts/*.sh scripts/pi/*.sh tests/*.sh; do bash -n "$f"; done
+      - name: shellcheck
+        run: shellcheck -S warning scripts/*.sh scripts/pi/*.sh tests/*.sh
+      - name: Unit tests
+        run: python -m pytest -q
+      - name: setup_pi.sh unit-file rewrite
+        run: bash tests/test_setup_units.sh
+      - name: Bundle builds (with simulator)
+        run: bash scripts/build_pi_bundle.sh --sim --tar "$RUNNER_TEMP/sg.tgz" && tar tzf "$RUNNER_TEMP/sg.tgz" | grep -q nmea0183_simulator.py
