@@ -2,14 +2,27 @@
 
 Pi 4 + PiCAN-M kit reading NMEA 2000 from the boat's bus and exposing it as SignalK. This is the long-running, boat-side rig — the Pi powers on with the boat and stays up.
 
-Two variants based on where SailinGrace itself runs:
+Where SailinGrace itself runs depends on the boat's **combination** (the letters A–G in SailinGrace's [system_architecture.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/system_architecture.md), the same field as Settings → System):
 
-| Variant | Pi runs | Laptop runs | When to pick |
+| Combination | Pi runs | Laptop runs | When to pick |
 |---------|---------|-------------|--------------|
-| **A1 — All-in-one** | signalk-server + SailinGrace backend + frontend | browser only | No laptop available; pure boat-side appliance |
-| **A2 — Pi as relay** (recommended) | signalk-server only | SailinGrace (native or Docker) | You have a laptop. Better CPU, bigger screen, Pi stays simple |
+| **C — Pi as signal hub** (recommended) | The hub services below, nothing else | SailinGrace (native or Docker) | You have a laptop. Better CPU, bigger screen, Pi stays simple |
+| **A / B — Pi all-in-one** | The hub services + SailinGrace backend + frontend | browser only | No laptop available; pure boat-side appliance |
 
-Hardware bring-up is identical for both; only the SailinGrace-install step differs (A1 installs on the Pi via this doc; A2 installs on the laptop via [install_native.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_native.md) (or [install_docker.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_docker.md)) and points at the Pi's SignalK URL).
+Older docs call these variants **A2** (= C) and **A1** (= A/B).
+
+**The hub services** (what `setup_pi.sh` installs, and all a Pi runs in combination C):
+
+| Service | What |
+|---|---|
+| `signalk.service` | signalk-server `:3000`, fed by `can0` |
+| `sailingrace-logger.service` | Raw SignalK delta logger → `~/sailingrace-logs/` |
+| `sailingrace-config.service` | Setup page `:8080` |
+| `ups-monitor.service` | UPS HAT (D) battery monitor and clean shutdown |
+
+The hub job comes first: nothing else may cost it frames. How much more a Pi can carry is measured (SailinGrace backlog PI-1's load test), not assumed. In combination C, no `sailingrace.service` or `sg-*` units (backend, weather collectors) should be enabled.
+
+Hardware bring-up is identical for both; only the SailinGrace-install step differs (A/B installs on the Pi via this doc; C installs on the laptop via [install_native.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_native.md) (or [install_docker.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_docker.md)) and points at the Pi's SignalK URL).
 
 ## What's in the kit
 
@@ -43,7 +56,7 @@ ip link show can0        # should be present and bring-uppable
 
 **Use the script.** Steps 1–5 below are bundled in `scripts/setup_pi.sh` — idempotent, works on Bookworm and Trixie, takes ~5 min. Manual commands kept underneath so you understand what the script does.
 
-The relay Pi (Variant A2) deploys from the **public [`SailinGrace-pi`](https://github.com/atrainathought/SailinGrace-pi) repo** — relay files only (logger + UPS monitor + setup), no routing code, **no PAT needed**. This is the recommended path; it's generated from this repo via `scripts/build_pi_bundle.sh`.
+The hub Pi (combination C) deploys from the **public [`SailinGrace-pi`](https://github.com/atrainathought/SailinGrace-pi) repo** — relay files only (logger + UPS monitor + setup), no routing code, **no PAT needed**. This is the recommended path; it's generated from this repo via `scripts/build_pi_bundle.sh`.
 
 ```bash
 # Recommended — clone the public relay repo + run (UPS monitor + logger included):
@@ -64,7 +77,7 @@ scp dist/sailingrace-pi.tar.gz pi@<pi-host>:~
 ssh pi@<pi-host> 'tar xzf sailingrace-pi.tar.gz && bash SailinGrace/scripts/setup_pi.sh && sudo reboot'
 ```
 
-> **A1 only** (Pi runs the full app — not the recommended setup) needs the **private** main repo and a GitHub personal-access-token (classic, `repo` scope): `git clone https://<PAT>@github.com/atrainathought/SailinGrace.git`. The relay path above does not.
+> **A/B only** (Pi runs the full app — not the recommended setup) needs the **private** main repo and a GitHub personal-access-token (classic, `repo` scope): `git clone https://<PAT>@github.com/atrainathought/SailinGrace.git`. The relay path above does not.
 
 After the script runs, do four things by hand (interactive / browser-based — not scriptable):
 
@@ -143,9 +156,9 @@ Alternatives if your signalk-server version doesn't have that toggle:
 
 ### 5. Launch SailinGrace
 
-**Variant A2 (recommended)** — Pi is the SignalK relay, SailinGrace runs on a laptop. Install on the laptop via [install_native.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_native.md) (`bash scripts/install_native.sh` in the SailinGrace clone — no Docker) or [install_docker.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_docker.md). Sign in as **admin**, then in Settings → Network set `ws://<pi>.local:3000/signalk/v1/stream?subscribe=self` and save — it applies live, no restart. Pi side: **nothing more to do**.
+**Combination C (recommended)** — the Pi is the signal hub, SailinGrace runs on a laptop. Install on the laptop via [install_native.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_native.md) (`bash scripts/install_native.sh` in the SailinGrace clone — no Docker) or [install_docker.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_docker.md). Sign in as **admin**, then in Settings → Network set `ws://<pi>.local:3000/signalk/v1/stream?subscribe=self` and save — it applies live, no restart. Pi side: **nothing more to do**.
 
-**Variant A1** — Pi runs everything. Use the main repo's native installer on the Pi (it supports Raspberry Pi OS / arm64 and installs an auto-start systemd unit — this repo no longer ships its own `sailingrace.service`):
+**Combinations A / B** — Pi runs everything. Use the main repo's native installer on the Pi (it supports Raspberry Pi OS / arm64 and installs an auto-start systemd unit — this repo no longer ships its own `sailingrace.service`):
 
 ```bash
 # In a SailinGrace clone on the Pi:
@@ -205,7 +218,7 @@ sudo npm install -g signalk-server
 signalk-server-setup          # installs and starts signalk.service when you answer yes
 sudo systemctl enable --now signalk.service
 
-# 5. UPS monitor (always on the Pi — A1 and A2).
+# 5. UPS monitor (always on the Pi, in every combination).
 sudo apt install -y python3-venv git
 git clone https://github.com/atrainathought/SailinGrace.git
 cd SailinGrace
@@ -409,7 +422,7 @@ sudo .venv/bin/python scripts/discover_signals.py apply --auto
 
 ## Wi-Fi access point — Pi as the boat network
 
-When there's no boat Wi-Fi to join, make the Pi broadcast its own SSID so the laptop (and any tablets) connect straight to it. This is what turns the Pi into a self-contained "Wi-Fi server": instruments in over NMEA 2000, SignalK out over the Pi's own Wi-Fi, working with **zero internet** offshore. SailinGrace still runs on the laptop (Variant A2) — the AP just carries the SignalK stream from the Pi to it.
+When there's no boat Wi-Fi to join, make the Pi broadcast its own SSID so the laptop (and any tablets) connect straight to it. This is what turns the Pi into a self-contained "Wi-Fi server": instruments in over NMEA 2000, SignalK out over the Pi's own Wi-Fi, working with **zero internet** offshore. SailinGrace still runs on the laptop (combination C) — the AP just carries the SignalK stream from the Pi to it.
 
 Two ways. Both target the NetworkManager default on Bookworm/Trixie — don't hand-roll `hostapd` + `dnsmasq` config files on these OSes, NetworkManager fights them.
 
@@ -456,7 +469,7 @@ If the laptop joins the Pi's AP for instruments, that Wi-Fi radio is now busy an
 - **Conformal coating** on both HATs before mounting. Salt + humidity will eat unprotected boards in a season.
 - **Power input** — feed the UPS HAT's USB-C input, not the Pi's. Pi's own power port stays on the *output* side of the UPS.
 - **Pi 3B+ vs Pi 4** — micro-USB on the 3B+ is mechanically weaker. Hot-glue or strain-relief on the micro-USB plug.
-- **Network surface** — the Pi exposes signalk-server on 3000 (admin protected by its own login; anonymous read-only if you enabled Allow Readonly) and the config UI on 8080 (open over the USB-C cable, setup token elsewhere). In A1 the SailinGrace app on 8000 gives everyone the read-only viewer profile once the admin password is set; changes need that password. Still, prefer a private boat network over public Wi-Fi.
+- **Network surface** — the Pi exposes signalk-server on 3000 (admin protected by its own login; anonymous read-only if you enabled Allow Readonly) and the config UI on 8080 (open over the USB-C cable, setup token elsewhere). In A/B the SailinGrace app on 8000 gives everyone the read-only viewer profile once the admin password is set; changes need that password. Still, prefer a private boat network over public Wi-Fi.
 
 ## Uninstall
 

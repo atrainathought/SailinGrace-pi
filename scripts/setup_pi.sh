@@ -1,5 +1,5 @@
 #!/bin/bash
-# scripts/setup_pi.sh — bring up a Pi for SailinGrace's Path A (SignalK ingest)
+# scripts/setup_pi.sh — bring up a Pi for SailinGrace's SignalK ingest (the Pi as signal hub)
 #
 # Run on a fresh Bookworm or Trixie Pi *after* you have:
 #   - SSH working
