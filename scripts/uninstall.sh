@@ -155,6 +155,9 @@ done
 if [[ -d /etc/sailingrace ]]; then
   do_or_say "remove /etc/sailingrace (config UI setup token)" sudo rm -rf /etc/sailingrace
 fi
+if [[ -f /etc/udev/rules.d/86-sailingrace-usb0.rules ]]; then
+  do_or_say "remove usb0 NetworkManager udev override" sudo rm -f /etc/udev/rules.d/86-sailingrace-usb0.rules
+fi
 
 # ── 4. repo removal (opt-in, explicit) ──────────────────────────────
 
