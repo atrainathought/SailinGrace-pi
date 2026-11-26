@@ -20,7 +20,14 @@ Older docs call these variants **A2** (= C) and **A1** (= A/B).
 | `sailingrace-config.service` | Setup page `:8080` |
 | `ups-monitor.service` | UPS HAT (D) battery monitor and clean shutdown |
 
-The hub job comes first: nothing else may cost it frames. How much more a Pi can carry is measured (SailinGrace backlog PI-1's load test), not assumed. In combination C, no `sailingrace.service` or `sg-*` units (backend, weather collectors) should be enabled.
+`ups-monitor.service` is installed by `setup_pi.sh` but only does its job with the UPS HAT fitted; on a bench Pi without one, leave it disabled.
+
+The hub job comes first: nothing else may cost it frames. How much more a Pi can carry is measured (SailinGrace backlog PI-1's load test), not assumed. In combination C, no `sailingrace.service` or `sg-*` units (backend, weather collectors, cache pruning) should be enabled. Older installs put some of them under the user's systemd, so check both:
+
+```bash
+systemctl list-unit-files --state=enabled 'sg-*' 'sailingrace*'   # only sailingrace-logger and sailingrace-config
+systemctl --user list-unit-files --state=enabled 'sg-*'           # none
+```
 
 Hardware bring-up is identical for both; only the SailinGrace-install step differs (A/B installs on the Pi via this doc; C installs on the laptop via [install_native.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_native.md) (or [install_docker.md](https://github.com/atrainathought/SailinGrace/blob/master/docs/install_docker.md)) and points at the Pi's SignalK URL).
 
