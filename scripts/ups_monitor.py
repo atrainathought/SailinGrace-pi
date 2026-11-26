@@ -6,7 +6,7 @@ the 2× 18650 pack drops below a configurable cutoff. The whole point of
 the UPS is *graceful* shutdown when boat power is yanked — without this
 script the Pi runs until the cells flatline, which corrupts whatever is
 mid-write on the SD card (logs, signalk-server state, and the SQLite WAL
-in the all-in-one A1 setup) as reliably as just pulling the plug.
+in the all-in-one A/B setup) as reliably as just pulling the plug.
 
 Why we don't just trust the UPS hardware: the HAT (D) keeps the Pi
 running until the cells are exhausted, then drops the rail. That cold-
