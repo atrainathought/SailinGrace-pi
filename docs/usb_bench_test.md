@@ -55,10 +55,10 @@ path being tested. Phase 2 removes that compromise.
 |---|---|---|
 | Boat Pi | Pi 4B + PiCAN-M, `setup_pi.sh` run, `can0` added as a signalk-server source ([install_rpi.md § 3](install_rpi.md#3-wire-can0-as-a-signalk-source)) | — |
 | Reader Pi | Pi 4B + Waveshare RS485 CAN HAT, set up as below, **its own 5 V / 3 A supply** | — |
-| ESP32 | — | Feather HUZZAH32 + CAN transceiver, flashed with `firmware-n2ksim` ([wiring](https://github.com/atrainathought/SailinGrace-esp32/tree/main/firmware-n2ksim#wiring-feather-huzzah32)), a USB **data** cable |
+| ESP32 | — | An ESP32 board (Feather HUZZAH32 or a plain DevKit) + a 3.3 V CAN transceiver module (SN65HVD230 / "VP230"), flashed with `firmware-n2ksim` ([wiring](https://github.com/atrainathought/SailinGrace-esp32/tree/main/firmware-n2ksim#wiring-feather-huzzah32)), a USB **data** cable. The ESP32 has no CAN transceiver of its own, and the Waveshare HAT's can't be borrowed (it sits behind its own MCP2515). |
 | CAN cable | One **male** M12 cable with bare wires (a drop cable cut in half, or a field-attachable male connector), into the PiCAN-M | 3 jumper wires, ESP32 → the reader HAT's terminal |
 | Laptop | USB-C cable to the boat Pi (a **USB-C port**; USB-A is marginal for a Pi 4 + HAT); WiFi or ethernet to the reader | USB cable to the ESP32 |
-| Tools | Multimeter | — |
+| Tools | Multimeter. If its Ω range won't read ~0 with the probes shorted, use **diode mode** for continuity (~0 = connected, `1` = open). | — |
 
 Until SailinGrace-pi PR #2 is merged, check out branch
 `ccr-2e575357-7ob7cj` on **both** Pis (`git fetch && git checkout
@@ -115,12 +115,43 @@ reader-Pi header GND pin (pin 6). The 4-wire lead with a small white plug
 that comes with some of these HATs is **not** an N2K cable. In N2K wiring,
 **white = CAN_H, blue = CAN_L, black = ground**.
 
-A CAN bus is terminated at its **two physical ends only**:
+**Find the PiCAN-M's CAN pins with a meter, don't trust pin numbers.**
+Looking into the PiCAN-M's M12 (male pins), counting clockwise from the
+locating nub, our Rev B board measured:
+
+| M12 pin | Goes to transceiver U1 | Use |
+|---|---|---|
+| **Centre** | right side, 2nd leg from the bottom (pin 6, CAN L) | **L** |
+| **2nd clockwise from the nub** | right side, 2nd leg from the top (pin 7, CAN H) | **H** |
+| 3rd clockwise from the nub | bottom-right leg (pin 5, a reference pin) | nothing |
+
+(U1 is the 8-pin chip nearest the M12 and JP1; hold it with its pin-1 dot
+at the top-left.) With the PiCAN-M powered off, check the cable too: the
+wire that beeps to U1 pin 7 goes to the reader's **H**, the one that beeps
+to pin 6 goes to **L**, whatever its colour. With H on the wrong pin,
+nothing crosses in either direction and the sender just WARNs, so check
+this before anything else.
+
+A CAN bus is terminated at its **two physical ends only**. On these
+boards:
+
+- **PiCAN-M:** JP1 is the terminator, and on our board it's **unpopulated**
+  (two empty holes beside R4), so the PiCAN-M end is unterminated. That's
+  right for the boat backbone; on the bench, put both bench terminators
+  elsewhere.
+- **Waveshare HAT:** the 120R DIP switch may be sealed under conformal
+  coating and immovable. If so, fit a **120 Ω resistor** (brown-red-brown)
+  across its H/L screw terminal instead.
+- **VP230 module:** a 2-pin header next to CANH/CANL; a jumper cap on it
+  switches in its 120 Ω.
+
+On a bench a metre long, two 120 Ω anywhere on the link works; the table
+gives the textbook placement.
 
 | Link | Wiring | Termination |
 |---|---|---|
-| **Phase 1, direct** | M12 male cable into the PiCAN-M: white → **H**, blue → **L**, black → reader GND pin. Red (12 V) and bare shield unconnected. | HAT **120R switch, CAN = ON** · PiCAN-M jumper **ON** |
-| **Phase 2, direct** | As phase 1, plus ESP32 transceiver CANH → **H**, CANL → **L**, GND → reader GND pin, at the same terminal | The reader is now in the **middle**: HAT switch **OFF** · ESP32 120 Ω **ON** · PiCAN-M jumper **ON** |
+| **Phase 1, direct** | Into the PiCAN-M's M12 (cable or jumpers on its pins): CAN H / CAN L per the meter check above → reader **H** / **L**; ground → reader GND pin. Red (12 V) and bare shield unconnected. | 120 Ω at the reader (switch or resistor). With JP1 unpopulated the PiCAN-M end has none; one 120 Ω works on a short bench link (P2 reads ~120 Ω, not 60). |
+| **Phase 2, direct** | As phase 1, plus the VP230's CANH → **H**, CANL → **L**, ESP32 GND → reader GND pin, at the same terminal | 120 Ω at the reader **and** the VP230 jumper on (~60 Ω total) |
 | **Backbone (either phase)** | Each node on its own tee with a male M12 drop | All node termination **OFF**; the backbone's two terminators do it |
 
 Backbone tees have **female** sockets, so anything plugged into one needs a
@@ -181,14 +212,14 @@ Wire the phase 1 direct link. Measure across H/L at the HAT terminal:
 | Reading | Means |
 |---|---|
 | **~60 Ω** | ✅ two terminators |
-| ~120 Ω | one end isn't terminated (the HAT's 120R switch or the PiCAN-M jumper) |
+| ~120 Ω | one terminator. Expected in phase 1 when the PiCAN-M's JP1 is unpopulated; otherwise one end isn't terminated |
 | ~40 Ω | three terminators (on a backbone, a node's termination is ON) |
 | 0 Ω / open | swapped or broken wire |
 
 Power both Pis. Measure H and L to GND: both should be **≈ 2.5 V** when
 idle.
 
-**Pass:** 60 Ω and 2.5 V / 2.5 V.
+**Pass:** 60 Ω (120 Ω with one terminator, see above) and 2.5 V / 2.5 V.
 
 ### P3 — Frames cross the wire
 
@@ -227,7 +258,9 @@ sudo python3 ~/SailinGrace-pi/scripts/discover_signals.py scan --channels can --
 
 | Symptom | Likely cause |
 |---|---|
-| Simulator `WARN: send failed`, boat Pi sees nothing | H/L swapped; termination (re-check P2); a wrong oscillator on either Pi (PiCAN-M 16 MHz, Waveshare 12 MHz): re-run `setup_pi.sh` with `CAN_HAT=` / `CAN_OSCILLATOR=` |
+| Simulator `WARN: send failed`, boat Pi sees nothing | H on the wrong M12 pin (do the meter check under *Wiring and termination*); H/L swapped; termination (re-check P2); a wrong oscillator on either Pi (PiCAN-M 16 MHz, Waveshare 12 MHz): re-run `setup_pi.sh` with `CAN_HAT=` / `CAN_OSCILLATOR=` |
+| `MCP251x didn't enter in config mode` in `dmesg`, `can0` STOPPED | Seen twice on this bench: once fixed by connecting ground between the nodes (reader GND pin ↔ the PiCAN-M's GND screw), once by fixing a wire on the wrong M12 pin. Boot with the CAN wires off to confirm the board itself is fine, then add ground, L and H one at a time |
+| Nothing either way, both Pis ERROR-PASSIVE, after re-plugging a link that worked | Seen once on this bench and cleared by a reboot; could not be reproduced. Try `sudo ip link set can0 down && sudo ip link set can0 up` on the **reader** first, then the boat Pi, and note which one fixed it |
 | Frames arrive but error counters climb | Termination or a long untwisted H/L pair |
 | `can0` drops to BUS-OFF and comes back | That's the bus-off recovery working; find the wiring fault |
 
@@ -247,6 +280,12 @@ N2K→SignalK mapping before this test was written, so a mismatch here
 points at the bus or the Pi.)
 
 ### P5 — SignalK on the boat Pi
+
+First make sure the `can0` connection is **enabled** in signalk-server
+(admin UI → Server → Data Connections; in `~/.signalk/settings.json` it's
+the `pipedProviders` entry with `"interface": "can0"`, which must have
+`"enabled": true`). Ours was configured but disabled, and SignalK then
+shows no N2K data at all while `candump` is fine.
 
 From the laptop (PowerShell: use `curl.exe`):
 
@@ -269,7 +308,9 @@ and watch one full 120 s cycle:
 Also check:
 - [ ] Position creeps along COG (about 3.6 m/s), with no jumps
 - [ ] The Dashboard's Deltas/sec is steady
-- [ ] The source shows as `can0.43`. The Python simulator doesn't answer
+- [ ] The source shows as `<provider id>.43`, e.g. `nmea2000.43` (the
+      prefix is the signalk-server connection's ID, not the interface
+      name). The Python simulator doesn't answer
       product-info requests, so no product name appears; the ESP32 does
       that in phase 2.
 - [ ] The boat Pi's SignalK delta log (sailingrace-logger) is growing
@@ -288,11 +329,17 @@ for real instrument data in the database.
    SailinGrace), instruments **SignalK**, SailinGrace on the **laptop**.
    That matches Lynx's `config/boats/lynx.yaml`.
 2. **Settings → Network:** the boat Pi's signalk-server should be offered
-   as a one-tap choice. mDNS over USB-C depends on the laptop's OS and
-   firewall. If nothing is offered within about 15 s, enter
-   `ws://10.55.0.1:3000/signalk/v1/stream?subscribe=self` by hand, and note
-   which happened. The reader Pi runs signalk-server too, but has no `can0`
-   source. If it shows up in the list, **don't pick it**.
+   as a one-tap choice under **"Found on this network"**. That needs the
+   Python `zeroconf` package in SailinGrace's environment; without it the
+   backend skips discovery silently and `/api/system/setup` shows
+   `discovered: []`. mDNS over USB-C also depends on the laptop's OS and
+   firewall. If nothing is offered within about 15 s, pick **Ingest source
+   → SignalK (ws://)** (the URL box only appears after that), enter
+   `ws://10.55.0.1:3000/signalk/v1/stream?subscribe=self` by hand (or the
+   boat Pi's WiFi address if it isn't on USB-C), Save, and note which
+   happened. Saving needs the admin password. The reader Pi runs
+   signalk-server too, but has no `can0` source. If it shows up in the
+   list, **don't pick it**.
 3. **Pre-race check** (Settings → System): the feed-type check passes.
 
 ```bash
@@ -304,17 +351,22 @@ curl http://localhost:8000/api/system/setup           # combination C, instrumen
 - The pre-race check is green for instruments
 - Wind, heading and position light up
 - The dashboard shows 10 → 20 kn and starboard → port in the right units
-- Heading crosses north with no 180° spike in the UKF output
+- COG crosses north at t ≈ 60 with no jump or 180° spike
+  (`curl http://localhost:8000/api/state`, `cog_deg`; the dashboard
+  doesn't show COG). Watch COG, not heading: the simulator sends
+  *magnetic* heading and SailinGrace shows *true*, so with Newport's
+  ~14° W variation the displayed heading runs ~336–355° and never
+  crosses north.
 - Freshness indicators show green
 
 ### P7 — Fault handling
 
 | Test | Do | Pass |
 |---|---|---|
-| Unplug the CAN link | Pull it for 30 s, then reconnect | The simulator may print `WARN` while nothing acknowledges its frames. The boat Pi stays up, and data resumes in SignalK within about 5 s. SailinGrace's freshness goes stale, then recovers. |
-| Quiet feed | Stop the simulator (Ctrl-C) for more than 60 s | Freshness goes red, then recovers when it's restarted. A new address claim (`18EEFF2B`) appears on the boat Pi. No **Switch** banner appears and the pre-race check stays quiet: both act only when a *second* SignalK server with data is visible. The drop isn't logged anywhere yet (backlog SYS-5). |
-| Reboot the boat Pi | `sudo reboot` | The simulator WARNs until the boat Pi's `can0` is back; then signalk-server reconnects by itself |
-| Force bus-off | Short H–L for about 2 s with a jumper | `ip -statistics` on both Pis shows `bus-off` 1 or more, **and** both links return to ERROR-ACTIVE without you doing anything (restart-ms 100) |
+| Unplug the CAN link | Pull it for 30–45 s, then reconnect | The simulator prints `WARN` and both Pis go ERROR-PASSIVE while nothing acknowledges. The boat Pi stays up, and data resumes in SignalK within about 5 s. SailinGrace's freshness goes stale, then recovers. (Once on our bench neither side recovered until a reboot; a repeat recovered by itself. See the P3 symptom table.) |
+| Quiet feed | Stop the simulator (Ctrl-C) for more than 60 s | Freshness goes red (`/api/state` → `available: false` within ~30 s), then recovers when it's restarted. A new address claim (`18EEFF2B`) appears on the boat Pi. No **Switch** banner appears and the pre-race check stays quiet: both act only when a *second* SignalK server with data is visible. The drop isn't logged anywhere yet (backlog SYS-5). Note `/api/sensors/capabilities` keeps saying `available: true`; use `/api/state`. |
+| Reboot the boat Pi | `sudo reboot` | `can0` comes back clean and signalk-server reconnects by itself (about 70 s to fresh SignalK data). SailinGrace's SignalK client backs off to a 30 s retry while the Pi is down, so it can lag SignalK by up to ~30 s. |
+| Force bus-off | Short H–L for about 2 s with a jumper | The sending Pi's state shows **BUS-OFF** (`ip -details link show can0`), **and** both links return to ERROR-ACTIVE within a few seconds without you doing anything (restart-ms 100). The mcp251x driver doesn't increment the `bus-off` *counter*, so check the state, not the counter. |
 | Power sag | Run for 30 min, then re-check `vcgencmd get_throttled` on the boat Pi | Still `0x0` |
 | Soak | Overnight | Rates unchanged. The logger respects `MAX_LOG_MB`. No growth in signalk-server memory (`systemctl status signalk.service`). |
 
@@ -326,6 +378,12 @@ While the simulator runs, record on the boat Pi:
 mkdir -p ~/bench && cd ~/bench && timeout 300 candump -l can0   # 5 min → candump-<date>.log
 scp ~/bench/candump-*.log pi@sg-reader.local:bench/             # make ~/bench on the reader first
 ```
+
+Expect about 42 frames/s: 10 Hz each for 127250, 129025, 129026, 130306,
+1 Hz each for 128259, 128267, plus a 126993 heartbeat once a minute from
+the boat Pi's own signalk-server (`1DF011xx`, its own address). Drop those
+heartbeat lines before replaying, or the replay sends frames from the boat
+Pi's own address.
 
 To replay it, stop the simulator first (the same source address would
 collide), then on the reader run `canplayer -I ~/bench/candump-*.log -l i`.
@@ -367,10 +425,15 @@ t=  3.0 src=42 aws=10kn awa=30 hdg=350.5 bsp=6.5 sog=7.0 depth=25.0 lat=… lon=
 
 ### E2 — Wire it in
 
-Power everything off. Add the ESP32 to the reader HAT's terminal (CANH →
-H, CANL → L, GND → reader GND pin). **Flip the HAT's 120R switch OFF**,
-because the reader is now in the middle. Fit 120 Ω at the ESP32 and leave
-the PiCAN-M jumper ON.
+Power everything off. ESP32 to the VP230 module: **3V3 → 3.3V, GND → GND,
+GPIO32 (D32) → CAN TX, GPIO27 (D27) → CAN RX** (TX to TX, not crossed like
+serial; RX0/TX0/RX2/TX2 are UARTs, not CAN). Then the VP230's CANH → reader
+**H**, CANL → reader **L**, ESP32 GND → reader GND pin.
+
+Termination: keep the reader's 120 Ω and put the VP230's jumper on. The
+textbook layout would move the reader's terminator to the PiCAN-M end,
+since the reader is now in the middle, but the PiCAN-M's JP1 is
+unpopulated and on a short bench it makes no difference.
 
 Measure **~60 Ω** across H/L again. With power on, H and L should each be
 ≈ 2.5 V.
